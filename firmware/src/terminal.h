@@ -33,6 +33,12 @@ public:
   // Invalidates the cell cache so the next live frame repaints fully.
   void showBanner(const char *title, const char *subtitle, uint16_t accent);
 
+  // Mark a cell block dirty (e.g. after OSD hide).
+  void invalidateCells(int x0, int y0, int cols, int rows);
+
+  // Skip painting these cells while an OSD covers them; cols/rows <= 0 clears.
+  void setOverlayCells(int x0, int y0, int cols, int rows);
+
   bool linked() const { return linked_; }
   bool takeBye();
   uint32_t lastGoodFrameMs() const { return last_good_ms_; }
@@ -78,9 +84,14 @@ private:
   uint8_t payload_[TERM_PAYLOAD]{};
   uint16_t crc_expect_ = 0;
 
+  // Overlay hole: inclusive cell range skipped by flush.
+  bool hole_on_ = false;
+  int hole_x0_ = 0, hole_y0_ = 0, hole_x1_ = 0, hole_y1_ = 0;
+
   void applyPayload();
   void paintCell(int x, int y, bool cursor_block);
   void invalidateCache();
+  bool cellInHole(int x, int y) const;
   uint16_t ansiToRgb(uint8_t idx) const;
   static uint16_t crc16(const uint8_t *data, size_t n, uint16_t seed = 0xFFFF);
   void reply(uint8_t code, uint8_t seq);

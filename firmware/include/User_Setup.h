@@ -20,7 +20,7 @@
 #define TFT_DC   3
 #define TFT_RST  2
 #define TFT_MISO -1
-// Schematic: BL → GPIO5. Leave TFT_BL undefined until PWM backlight is wired.
+// BL is driven by firmware PWM on GPIO5 — do not define TFT_BL.
 
 #define LOAD_GLCD
 #define LOAD_FONT2

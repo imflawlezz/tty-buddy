@@ -75,6 +75,51 @@ void Terminal::showBanner(const char *title, const char *subtitle, uint16_t acce
   tft_->drawString(subtitle ? subtitle : "", 2, 2 + TERM_CELL_H, 1);
 }
 
+void Terminal::invalidateCells(int x0, int y0, int cols, int rows) {
+  if (cols <= 0 || rows <= 0)
+    return;
+  int x1 = x0 + cols - 1;
+  int y1 = y0 + rows - 1;
+  if (x0 < 0)
+    x0 = 0;
+  if (y0 < 0)
+    y0 = 0;
+  if (x1 >= TERM_COLS)
+    x1 = TERM_COLS - 1;
+  if (y1 >= TERM_ROWS)
+    y1 = TERM_ROWS - 1;
+  for (int y = y0; y <= y1; y++) {
+    row_dirty_[y] = true;
+    for (int x = x0; x <= x1; x++)
+      prev_attr_[y][x] = 0xFF;
+  }
+}
+
+void Terminal::setOverlayCells(int x0, int y0, int cols, int rows) {
+  if (cols <= 0 || rows <= 0) {
+    hole_on_ = false;
+    return;
+  }
+  hole_x0_ = x0;
+  hole_y0_ = y0;
+  hole_x1_ = x0 + cols - 1;
+  hole_y1_ = y0 + rows - 1;
+  if (hole_x0_ < 0)
+    hole_x0_ = 0;
+  if (hole_y0_ < 0)
+    hole_y0_ = 0;
+  if (hole_x1_ >= TERM_COLS)
+    hole_x1_ = TERM_COLS - 1;
+  if (hole_y1_ >= TERM_ROWS)
+    hole_y1_ = TERM_ROWS - 1;
+  hole_on_ = true;
+}
+
+bool Terminal::cellInHole(int x, int y) const {
+  return hole_on_ && x >= hole_x0_ && x <= hole_x1_ && y >= hole_y0_ &&
+         y <= hole_y1_;
+}
+
 void Terminal::reply(uint8_t code, uint8_t seq) {
   Serial.write(code);
   Serial.write(seq);
@@ -141,7 +186,8 @@ void Terminal::flush() {
       const bool is_cur = cur_lit && x == cur_x_ && y == cur_y_;
       if (is_cur || ch_[y][x] != prev_ch_[y][x] ||
           attr_[y][x] != prev_attr_[y][x]) {
-        paintCell(x, y, is_cur);
+        if (!cellInHole(x, y))
+          paintCell(x, y, is_cur);
         prev_ch_[y][x] = ch_[y][x];
         prev_attr_[y][x] = attr_[y][x];
       }
