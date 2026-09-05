@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# ASCII / glyph chart for tty-buddy (53×30).
-# Run inside the bridge shell:
+# Glyph chart for tty-buddy (53×30). Run inside the bridge shell:
 #   python3 daemon/tools/tty_bridge.py -p /dev/cu.usbmodemXXXX
 #   ./daemon/tools/test_ascii.sh
 set -euo pipefail
@@ -12,10 +11,10 @@ hr() { printf '%*s\n' "$COLS" '' | tr ' ' '-'; }
 putb() { printf "\\$(printf '%03o' "$1")"; }
 
 printf '\033[2J\033[H'
-printf '\033[1;36mtty-buddy ASCII test (%sx%s)\033[0m\n' "$COLS" "${LINES:-30}"
+printf '\033[1;36mtty-buddy glyph test (%sx%s)\033[0m\n' "$COLS" "${LINES:-30}"
 hr
 
-echo "1) Printable ASCII 0x20-0x7E (Font1 must show all):"
+echo "1) Printable ASCII 0x20-0x7E (Font1):"
 printf '   '
 for i in $(seq 32 126); do putb "$i"; done
 printf '\n\n'
@@ -47,7 +46,7 @@ printf '5) Attrs: '
 printf '\033[1mbold\033[0m \033[7mreverse\033[0m \033[41mredbg\033[0m \033[42mgrn\033[0m\n'
 printf '\n'
 
-echo "6) Unicode folds (should become ASCII on LCD):"
+echo "6) Unicode (on-device procedural — real box/block/Braille):"
 echo "   blocks: ▏▎▍▌▋▊▉█ ░▒▓  ⣿⣿⣀⣿"
 echo "   boxes:  ┌─┐│└─┘├─┤ ══║"
 echo "   arrows: ←↑→↓ ▶◀▲▼"

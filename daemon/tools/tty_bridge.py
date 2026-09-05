@@ -3,6 +3,7 @@
 PTY shell ↔ tty-buddy serial bridge.
 
 Renders a 53×30 pyte screen and streams CRC frames to the ESP display.
+Cell payload is (codepoint_be u16, attr u8); box/block/Braille stay as Unicode.
 
 Scrollback (also shown on the LCD):
   PageUp / Shift+PageUp     up half a screen
@@ -35,7 +36,7 @@ from pyte.screens import HistoryScreen
 COLS = 53
 ROWS = 30
 SCROLLBACK = 1000
-PAYLOAD_LEN = COLS * ROWS * 2
+PAYLOAD_LEN = COLS * ROWS * 3  # codepoint_be u16 + attr u8
 FRAME_MAGIC = b"\xaa\x55\xa5\x5a"
 FRAME_ACK = 0x06
 FRAME_NAK = 0x15
@@ -185,126 +186,83 @@ def color_index(color, default: int) -> int:
     return default
 
 
-def asciiize(ch: str) -> str:
-    """Fold Unicode glyphs to ASCII; Font 1 only covers 0x20–0x7E."""
+def encode_cp(ch: str) -> int:
+    """Codepoint for one cell: pass through device-supported glyphs, else fold to ASCII."""
     if not ch:
-        return " "
+        return ord(" ")
     o = ord(ch[0])
     if 0x20 <= o <= 0x7E:
-        return ch[0]
+        return o
+    if o == 0x00A0:
+        return ord(" ")
 
-    # Braille / block elements → density ASCII
-    if 0x2800 <= o <= 0x28FF:
-        dots = bin(o - 0x2800).count("1")
-        return " .:-=+*#%@"[min(dots, 9)]
-    if 0x2580 <= o <= 0x259F:
-        blocks = {
-            0x2588: "#",
-            0x2589: "#",
-            0x258A: "#",
-            0x258B: "#",
-            0x258C: "#",
-            0x258D: "+",
-            0x258E: "+",
-            0x258F: "|",
-            0x2590: "#",
-            0x2591: ".",
-            0x2592: "+",
-            0x2593: "*",
-            0x25A0: "#",
-            0x25AE: "#",
-            0x25FC: "#",
-            0x25FE: "#",
-        }
-        return blocks.get(o, "|")
-
-    # Box drawing
+    # Firmware paints these procedurally (not Font 1).
     if 0x2500 <= o <= 0x257F:
-        if o in (0x2500, 0x2501, 0x2504, 0x2505, 0x2508, 0x2509, 0x254C, 0x254D):
-            return "-"
-        if o in (0x2502, 0x2503, 0x2506, 0x2507, 0x250A, 0x250B, 0x254E, 0x254F):
-            return "|"
-        if o in (0x250C, 0x250F, 0x2510, 0x2513, 0x2514, 0x2517, 0x2518, 0x251B,
-                 0x251C, 0x2524, 0x252C, 0x2534, 0x253C, 0x2550, 0x2551, 0x2552,
-                 0x2553, 0x2554, 0x2555, 0x2556, 0x2557, 0x2558, 0x2559, 0x255A,
-                 0x255B, 0x255C, 0x255D, 0x255E, 0x255F, 0x2560, 0x2561, 0x2562,
-                 0x2563, 0x2564, 0x2565, 0x2566, 0x2567, 0x2568, 0x2569, 0x256A,
-                 0x256B, 0x256C):
-            if o in (0x2550, 0x256A, 0x256B, 0x256C):
-                return "="
-            if o in (0x2551,):
-                return "|"
-            return "+"
-        return "+"
+        return o
+    if 0x2580 <= o <= 0x259F:
+        return o
+    if 0x2800 <= o <= 0x28FF:
+        return o
+    if o in (
+        0x25A0,
+        0x25AA,
+        0x25AE,
+        0x25B2,
+        0x25B6,
+        0x25BC,
+        0x25C0,
+        0x25FC,
+        0x25FE,
+        0x00B7,
+        0x2022,
+        0x2026,
+        0x2190,
+        0x2191,
+        0x2192,
+        0x2193,
+        0x2713,
+        0x2714,
+        0x2717,
+        0x2718,
+    ):
+        return o
 
     table = {
-        0x00A0: " ",
-        0x00B7: "*",
-        0x2022: "*",
-        0x2023: "*",
-        0x2043: "-",
-        0x2212: "-",
-        0x2013: "-",
-        0x2014: "-",
-        0x2018: "'",
-        0x2019: "'",
-        0x201C: '"',
-        0x201D: '"',
-        0x2026: ".",
-        0x2190: "<",
-        0x2191: "^",
-        0x2192: ">",
-        0x2193: "v",
-        0x21B5: "<",
-        0x2264: "<",
-        0x2265: ">",
-        0x2260: "!",
-        0x2713: "v",
-        0x2714: "v",
-        0x2717: "x",
-        0x2718: "x",
-        0x25B6: ">",
-        0x25C0: "<",
-        0x25B2: "^",
-        0x25BC: "v",
-        0x00B0: "o",
-        0x2020: "+",
-        0x00D7: "x",
-        0x00F7: "/",
-        0x03BB: "l",  # λ often appears in prompts
-        0x271A: "+",
-        0xFF0D: "-",
-        0xFF5C: "|",
-        0xFF1A: ":",
-        0xFF1B: ";",
+        0x00B0: ord("o"),
+        0x00D7: ord("x"),
+        0x00F7: ord("/"),
+        0x2013: ord("-"),
+        0x2014: ord("-"),
+        0x2018: ord("'"),
+        0x2019: ord("'"),
+        0x201C: ord('"'),
+        0x201D: ord('"'),
+        0x2023: ord("*"),
+        0x2043: ord("-"),
+        0x2212: ord("-"),
+        0x21B5: ord("<"),
+        0x2260: ord("!"),
+        0x2264: ord("<"),
+        0x2265: ord(">"),
+        0x03BB: ord("l"),
     }
     if o in table:
         return table[o]
-
-    # Latin-1 accented → base letter when possible
     if 0xC0 <= o <= 0xFF:
-        approx = (
-            "AAAAAAACEEEEIIIIDNOOOOO*OUUUUYPsaaaaaaaceeeeiiiidnooooo/ouuuuypy"
-        )
-        return approx[o - 0xC0]
-
-    return "?"
+        approx = "AAAAAAACEEEEIIIIDNOOOOO*OUUUUYPsaaaaaaaceeeeiiiidnooooo/ouuuuypy"
+        return ord(approx[o - 0xC0])
+    return ord("?")
 
 
-def cell_to_bytes(char: str, fg, bg, bold: bool, reverse: bool) -> tuple[int, int]:
-    ch = asciiize(char)
-    o = ord(ch)
-    if o < 32 or o > 126:
-        o = ord(" ")
 
+def cell_attr(fg, bg, bold: bool, reverse: bool) -> int:
     fi = color_index(fg, 7)
     bi = color_index(bg, 0)
     if bold and fi < 8:
         fi += 8
     if reverse:
         fi, bi = bi, fi
-    attr = (fi & 0x0F) | ((bi & 0x0F) << 4)
-    return o, attr
+    return (fi & 0x0F) | ((bi & 0x0F) << 4)
 
 
 def build_frame(
@@ -315,11 +273,13 @@ def build_frame(
         row = screen.buffer[y]
         for x in range(COLS):
             cell = row[x]
-            ch, attr = cell_to_bytes(
-                cell.data, cell.fg, cell.bg, bool(cell.bold), bool(cell.reverse)
+            cp = encode_cp(cell.data)
+            attr = cell_attr(
+                cell.fg, cell.bg, bool(cell.bold), bool(cell.reverse)
             )
-            payload.append(ch)
-            payload.append(attr)
+            payload.append((cp >> 8) & 0xFF)
+            payload.append(cp & 0xFF)
+            payload.append(attr & 0xFF)
     assert len(payload) == PAYLOAD_LEN
 
     cx = max(0, min(COLS - 1, int(screen.cursor.x)))
@@ -443,7 +403,7 @@ def handle_scroll_keys(key: bytes, screen: HistoryScreen) -> bool:
 
 def send_bye(ser: int, inbox: bytearray, seq: int) -> None:
     """FLAG_BYE frame so the device shows 'lost connection' immediately."""
-    payload = bytes([ord(" "), 0x07]) * (COLS * ROWS)
+    payload = bytes([0x00, ord(" "), 0x07]) * (COLS * ROWS)
     flags = FLAG_BYE
     hdr = bytes([seq & 0xFF, 0, 0, flags])
     crc = crc16_ccitt(hdr + payload)

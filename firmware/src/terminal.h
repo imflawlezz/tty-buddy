@@ -3,13 +3,14 @@
 #include <Arduino.h>
 #include <TFT_eSPI.h>
 
-// Font 1 (GLCD) 6×8 — densest built-in monospace on 320×240
+// Font 1 (GLCD) 6×8 ASCII + on-device procedural Unicode (box/block/Braille).
 static constexpr int TERM_CELL_W = 6;
 static constexpr int TERM_CELL_H = 8;
 static constexpr int TERM_COLS = 320 / TERM_CELL_W; // 53
 static constexpr int TERM_ROWS = 240 / TERM_CELL_H; // 30
 static constexpr int TERM_CELLS = TERM_COLS * TERM_ROWS;
-static constexpr int TERM_PAYLOAD = TERM_CELLS * 2; // (ch, attr) per cell
+// (codepoint_be u16, attr u8) per cell
+static constexpr int TERM_PAYLOAD = TERM_CELLS * 3;
 
 // Frame: AA 55 A5 5A | seq | cx | cy | flags | payload | crc16_be
 // flags: bit0 cursor visible, bit1 blink lit, bit7 daemon bye
@@ -30,13 +31,8 @@ public:
   void ingest(const uint8_t *data, size_t n);
   void flush();
 
-  // Invalidates the cell cache so the next live frame repaints fully.
   void showBanner(const char *title, const char *subtitle, uint16_t accent);
-
-  // Mark a cell block dirty (e.g. after OSD hide).
   void invalidateCells(int x0, int y0, int cols, int rows);
-
-  // Skip painting these cells while an OSD covers them; cols/rows <= 0 clears.
   void setOverlayCells(int x0, int y0, int cols, int rows);
 
   bool linked() const { return linked_; }
@@ -62,9 +58,9 @@ private:
   };
 
   TFT_eSPI *tft_ = nullptr;
-  uint8_t ch_[TERM_ROWS][TERM_COLS]{};
+  uint16_t cp_[TERM_ROWS][TERM_COLS]{};
   uint8_t attr_[TERM_ROWS][TERM_COLS]{};
-  uint8_t prev_ch_[TERM_ROWS][TERM_COLS]{};
+  uint16_t prev_cp_[TERM_ROWS][TERM_COLS]{};
   uint8_t prev_attr_[TERM_ROWS][TERM_COLS]{};
   bool row_dirty_[TERM_ROWS]{};
 
@@ -84,12 +80,13 @@ private:
   uint8_t payload_[TERM_PAYLOAD]{};
   uint16_t crc_expect_ = 0;
 
-  // Overlay hole: inclusive cell range skipped by flush.
   bool hole_on_ = false;
   int hole_x0_ = 0, hole_y0_ = 0, hole_x1_ = 0, hole_y1_ = 0;
 
   void applyPayload();
   void paintCell(int x, int y, bool cursor_block);
+  bool blitProcedural(int px, int py, uint16_t cp, uint16_t fg, uint16_t bg);
+  void blitRows(int px, int py, const uint8_t *rows, uint16_t fg, uint16_t bg);
   void invalidateCache();
   bool cellInHole(int x, int y) const;
   uint16_t ansiToRgb(uint8_t idx) const;
