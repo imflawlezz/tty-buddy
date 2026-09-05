@@ -17,6 +17,6 @@ PDF: [`schematics/tty-buddy/export/tty-buddy-schematic.pdf`](schematics/tty-budd
 
 | Control | ESP32-C3 SuperMini | Notes |
 |---------|--------------------|--------|
-| SW1 | GPIO21 → GND | Use internal pull-up in firmware |
+| SW1 | GPIO10 → GND | Use internal pull-up in firmware |
 
 Power: USB on SuperMini (5V pin unused on the schematic).
