@@ -40,6 +40,8 @@ FRAME_MAGIC = b"\xaa\x55\xa5\x5a"
 FRAME_ACK = 0x06
 FRAME_NAK = 0x15
 FLAG_BYE = 0x80
+# Static scrollback has no cursor blink — keepalive before device link timeout.
+KEEPALIVE_S = 1.0
 
 # Raw-mode sequences handled as scrollback (not forwarded to the PTY).
 KEY_SCROLL_UP_PAGE = (
@@ -521,6 +523,7 @@ def main() -> int:
     next_frame = time.monotonic()
     last_payload = b""
     last_cursor = (-1, -1, -1)
+    last_send = 0.0
     seq = 0
     screen_dirty = True
 
@@ -578,21 +581,24 @@ def main() -> int:
             cx = max(0, min(COLS - 1, int(screen.cursor.x)))
             cy = max(0, min(ROWS - 1, int(screen.cursor.y)))
             hidden = bool(getattr(screen.cursor, "hidden", False))
+            if isinstance(screen, HistoryScreen) and not at_live_bottom(screen):
+                hidden = True
             flags = 0 if hidden else (0x01 | (0x02 if cursor_on else 0))
             cursor_state = (cx, cy, flags)
+            need_keepalive = (now - last_send) >= KEEPALIVE_S
 
             if now >= next_frame and (
-                screen_dirty or cursor_state != last_cursor
+                screen_dirty or cursor_state != last_cursor or need_keepalive
             ):
                 next_frame = now + interval
                 frame = build_frame(screen, seq, cursor_on=cursor_on)
-                # magic(4) + hdr(4) precede the cell payload
-                payload = frame[8 : 8 + PAYLOAD_LEN]
+                payload = frame[8 : 8 + PAYLOAD_LEN]  # after magic(4)+hdr(4)
                 changed = payload != last_payload or cursor_state != last_cursor
-                if changed:
+                if changed or need_keepalive:
                     if send_frame(ser, ack_inbox, screen, seq, cursor_on):
                         last_payload = payload
                         last_cursor = cursor_state
+                        last_send = now
                         seq = (seq + 1) & 0xFF
                         screen_dirty = False
                 else:
