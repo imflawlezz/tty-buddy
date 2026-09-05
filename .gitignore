@@ -36,3 +36,5 @@ hardware/cad/*.f3d.bak
 **/_autosave-*
 **/*.lck
 **/\#auto_saved_files\#
+*.kicad_sch-bak
+*.kicad_pcb-bak
