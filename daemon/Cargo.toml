@@ -1,0 +1,28 @@
+[package]
+name = "tty-buddy"
+version = "0.1.0"
+edition = "2021"
+description = "Host daemon for tty-buddy ESP32 status display + PTY bridge"
+license = "MIT"
+
+[[bin]]
+name = "tty-buddy"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+clap = { version = "4", features = ["derive"] }
+crossterm = "0.28"
+ctrlc = "3"
+dirs = "5"
+libc = "0.2"
+portable-pty = "0.8"
+serde = { version = "1", features = ["derive"] }
+serialport = "4"
+toml = "0.8"
+vt100 = "0.16"
+
+[profile.release]
+lto = true
+codegen-units = 1

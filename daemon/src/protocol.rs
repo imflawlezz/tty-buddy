@@ -1,0 +1,385 @@
+//! Wire protocol: CRC frames + StatusSnap v10.
+
+pub const COLS: usize = 53;
+pub const ROWS: usize = 30;
+pub const CELLS: usize = COLS * ROWS;
+pub const PAYLOAD_LEN: usize = CELLS * 3; // 4770
+pub const FRAME_LEN: usize = 4 + 4 + PAYLOAD_LEN + 2; // 4780
+
+pub const FRAME_MAGIC: [u8; 4] = [0xAA, 0x55, 0xA5, 0x5A];
+pub const FRAME_ACK: u8 = 0x06;
+pub const FRAME_NAK: u8 = 0x15;
+pub const DEV_MODE_TOGGLE: u8 = 0x12;
+
+pub const FLAG_CURSOR_VISIBLE: u8 = 0x01;
+pub const FLAG_CURSOR_ON: u8 = 0x02;
+pub const FLAG_STATUS: u8 = 0x20;
+pub const FLAG_BYE: u8 = 0x80;
+
+pub const STATUS_VER: u8 = 10;
+pub const STATUS_SNAP_LEN: usize = 2211;
+pub const STYLE_LEN: usize = 45;
+pub const IFACE_COUNT: usize = 16;
+pub const SVC_COUNT: usize = 80;
+
+pub const ST_F_HAS_TEMP: u8 = 0x02;
+pub const ST_F_HAS_CPU: u8 = 0x20;
+pub const ST_F_HAS_MEM: u8 = 0x40;
+pub const ST_F_HAS_DISK: u8 = 0x80;
+
+pub const ST_SVC_FAILED: u8 = 0;
+pub const ST_SVC_ACTIVE: u8 = 1;
+pub const ST_SVC_DEACTIVATING: u8 = 2;
+pub const ST_SVC_ACTIVATING: u8 = 3;
+pub const ST_SVC_INACTIVE: u8 = 4;
+pub const ST_SVC_MAINTENANCE: u8 = 5;
+pub const ST_SVC_RELOADING: u8 = 6;
+
+pub const SEC_NONE: u8 = 0xFF;
+pub const SEC_UPTIME: u8 = 1;
+pub const SEC_SWAP: u8 = 2;
+pub const SEC_LOAD: u8 = 3;
+
+pub const METER_OFF: u8 = 0;
+pub const METER_ON: u8 = 1;
+
+pub fn crc16_ccitt(data: &[u8]) -> u16 {
+    let mut crc: u16 = 0xFFFF;
+    for &b in data {
+        crc ^= (b as u16) << 8;
+        for _ in 0..8 {
+            if crc & 0x8000 != 0 {
+                crc = (crc << 1) ^ 0x1021;
+            } else {
+                crc <<= 1;
+            }
+        }
+    }
+    crc
+}
+
+pub fn build_frame(seq: u8, cx: u8, cy: u8, flags: u8, payload: &[u8; PAYLOAD_LEN]) -> Vec<u8> {
+    let hdr = [seq, cx, cy, flags];
+    let mut crc_buf = Vec::with_capacity(4 + PAYLOAD_LEN);
+    crc_buf.extend_from_slice(&hdr);
+    crc_buf.extend_from_slice(payload);
+    let crc = crc16_ccitt(&crc_buf);
+    let mut out = Vec::with_capacity(FRAME_LEN);
+    out.extend_from_slice(&FRAME_MAGIC);
+    out.push(seq);
+    out.push(cx);
+    out.push(cy);
+    out.push(flags);
+    out.extend_from_slice(payload);
+    out.push((crc >> 8) as u8);
+    out.push((crc & 0xFF) as u8);
+    let _ = hdr;
+    out
+}
+
+#[derive(Clone, Debug)]
+pub struct StatusStyle {
+    pub label_c: u16,
+    pub bg_c: u16,
+    pub host_c: u16,
+    pub date_c: u16,
+    pub time_c: u16,
+    pub level_ok: u16,
+    pub level_warn: u16,
+    pub level_crit: u16,
+    pub hero_cpu_c: u16,
+    pub hero_mem_c: u16,
+    pub hero_disk_c: u16,
+    pub meter_mode: u8,
+    pub warn_at: u8,
+    pub crit_at: u8,
+    pub sec_left: u8,
+    pub sec_right: u8,
+    pub sec_left_c: u16,
+    pub sec_right_c: u16,
+    pub svc_active: u16,
+    pub svc_failed: u16,
+    pub svc_deactivating: u16,
+    pub svc_activating: u16,
+    pub svc_reloading: u16,
+    pub svc_inactive: u16,
+    pub svc_maintenance: u16,
+}
+
+impl Default for StatusStyle {
+    fn default() -> Self {
+        Self {
+            label_c: rgb565(0x6B, 0x7C, 0x8F),
+            bg_c: 0,
+            host_c: 0xFFFF,
+            date_c: rgb565(0x6B, 0x7C, 0x8F),
+            time_c: 0xFFFF,
+            level_ok: rgb565(0x81, 0xC7, 0x84),
+            level_warn: rgb565(0xE0, 0xC0, 0x6A),
+            level_crit: rgb565(0xE5, 0x73, 0x73),
+            hero_cpu_c: 0xFFFF,
+            hero_mem_c: 0xFFFF,
+            hero_disk_c: 0xFFFF,
+            meter_mode: METER_ON,
+            warn_at: 60,
+            crit_at: 90,
+            sec_left: SEC_NONE,
+            sec_right: SEC_NONE,
+            sec_left_c: 0xFFFF,
+            sec_right_c: 0xFFFF,
+            svc_active: rgb565(0x81, 0xC7, 0x84),
+            svc_failed: rgb565(0xE5, 0x73, 0x73),
+            svc_deactivating: rgb565(0xE0, 0xC0, 0x6A),
+            svc_activating: rgb565(0x4D, 0xD0, 0xE1),
+            svc_reloading: rgb565(0x4D, 0xD0, 0xE1),
+            svc_inactive: rgb565(0xA8, 0xB4, 0xC0),
+            svc_maintenance: rgb565(0x6B, 0x7C, 0x8F),
+        }
+    }
+}
+
+impl StatusStyle {
+    pub fn pack(&self) -> [u8; STYLE_LEN] {
+        let mut b = [0u8; STYLE_LEN];
+        let mut o = 0usize;
+        let put_u16 = |b: &mut [u8], o: &mut usize, v: u16| {
+            b[*o..*o + 2].copy_from_slice(&v.to_le_bytes());
+            *o += 2;
+        };
+        for v in [
+            self.label_c,
+            self.bg_c,
+            self.host_c,
+            self.date_c,
+            self.time_c,
+            self.level_ok,
+            self.level_warn,
+            self.level_crit,
+            self.hero_cpu_c,
+            self.hero_mem_c,
+            self.hero_disk_c,
+        ] {
+            put_u16(&mut b, &mut o, v);
+        }
+        b[o] = self.meter_mode;
+        b[o + 1] = self.warn_at;
+        b[o + 2] = self.crit_at;
+        b[o + 3] = self.sec_left;
+        b[o + 4] = self.sec_right;
+        o += 5;
+        for v in [
+            self.sec_left_c,
+            self.sec_right_c,
+            self.svc_active,
+            self.svc_failed,
+            self.svc_deactivating,
+            self.svc_activating,
+            self.svc_reloading,
+            self.svc_inactive,
+            self.svc_maintenance,
+        ] {
+            put_u16(&mut b, &mut o, v);
+        }
+        debug_assert_eq!(o, STYLE_LEN);
+        b
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct StatusIface {
+    pub name: String,
+    pub ip: String,
+    pub rx_bps: u32,
+    pub tx_bps: u32,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct StatusSvc {
+    pub name: String,
+    pub status: u8,
+}
+
+#[derive(Clone, Debug)]
+pub struct StatusSnap {
+    pub flags: u8,
+    pub style: StatusStyle,
+    pub hostname: String,
+    pub date: String,
+    pub time: String,
+    pub load_x100: [u16; 3],
+    pub uptime_sec: u32,
+    pub cpu_pct: u8,
+    pub mem_pct: u8,
+    pub disk_pct: u8,
+    pub swap_pct: u8,
+    pub mem_used_mb: u32,
+    pub mem_total_mb: u32,
+    pub disk_used_mb: u32,
+    pub disk_total_mb: u32,
+    pub swap_used_mb: u32,
+    pub swap_total_mb: u32,
+    pub cpu_temp_c10: i16,
+    pub ifaces: Vec<StatusIface>,
+    pub services: Vec<StatusSvc>,
+}
+
+impl Default for StatusSnap {
+    fn default() -> Self {
+        Self {
+            flags: 0,
+            style: StatusStyle::default(),
+            hostname: String::new(),
+            date: String::new(),
+            time: String::new(),
+            load_x100: [0; 3],
+            uptime_sec: 0,
+            cpu_pct: 255,
+            mem_pct: 255,
+            disk_pct: 255,
+            swap_pct: 255,
+            mem_used_mb: 0,
+            mem_total_mb: 0,
+            disk_used_mb: 0,
+            disk_total_mb: 0,
+            swap_used_mb: 0,
+            swap_total_mb: 0,
+            cpu_temp_c10: 0x7FFF,
+            ifaces: Vec::new(),
+            services: Vec::new(),
+        }
+    }
+}
+
+fn pad_str(s: &str, n: usize) -> Vec<u8> {
+    let mut raw = s.as_bytes().to_vec();
+    if raw.len() > n {
+        raw.truncate(n);
+    }
+    raw.resize(n, 0);
+    raw
+}
+
+impl StatusSnap {
+    pub fn pack(&self) -> [u8; STATUS_SNAP_LEN] {
+        let mut out = [0u8; STATUS_SNAP_LEN];
+        let mut o = 0usize;
+        let put = |out: &mut [u8], o: &mut usize, bytes: &[u8]| {
+            out[*o..*o + bytes.len()].copy_from_slice(bytes);
+            *o += bytes.len();
+        };
+        put(&mut out, &mut o, b"TBST");
+        put(&mut out, &mut o, &[STATUS_VER, self.flags]);
+        put(&mut out, &mut o, &self.style.pack());
+        put(&mut out, &mut o, &pad_str(&self.hostname, 24));
+        put(&mut out, &mut o, &pad_str(&self.date, 20));
+        put(&mut out, &mut o, &pad_str(&self.time, 12));
+        for v in self.load_x100 {
+            put(&mut out, &mut o, &v.to_le_bytes());
+        }
+        put(&mut out, &mut o, &self.uptime_sec.to_le_bytes());
+        put(
+            &mut out,
+            &mut o,
+            &[
+                self.cpu_pct,
+                self.mem_pct,
+                self.disk_pct,
+                self.swap_pct,
+            ],
+        );
+        for v in [
+            self.mem_used_mb,
+            self.mem_total_mb,
+            self.disk_used_mb,
+            self.disk_total_mb,
+            self.swap_used_mb,
+            self.swap_total_mb,
+        ] {
+            put(&mut out, &mut o, &v.to_le_bytes());
+        }
+        put(&mut out, &mut o, &self.cpu_temp_c10.to_le_bytes());
+
+        for i in 0..IFACE_COUNT {
+            let iface = self.ifaces.get(i);
+            let name = iface.map(|x| x.name.as_str()).unwrap_or("");
+            let ip = iface.map(|x| x.ip.as_str()).unwrap_or("");
+            let rx = iface.map(|x| x.rx_bps).unwrap_or(0);
+            let tx = iface.map(|x| x.tx_bps).unwrap_or(0);
+            put(&mut out, &mut o, &pad_str(name, 16));
+            put(&mut out, &mut o, &pad_str(ip, 40));
+            put(&mut out, &mut o, &rx.to_le_bytes());
+            put(&mut out, &mut o, &tx.to_le_bytes());
+        }
+        for i in 0..SVC_COUNT {
+            let svc = self.services.get(i);
+            let name = svc.map(|x| x.name.as_str()).unwrap_or("");
+            let st = svc.map(|x| x.status).unwrap_or(0);
+            put(&mut out, &mut o, &pad_str(name, 12));
+            put(
+                &mut out,
+                &mut o,
+                &[if name.is_empty() { 0 } else { st }],
+            );
+        }
+        debug_assert_eq!(o, STATUS_SNAP_LEN);
+        out
+    }
+
+    pub fn to_payload(&self) -> [u8; PAYLOAD_LEN] {
+        let mut payload = [0u8; PAYLOAD_LEN];
+        let snap = self.pack();
+        payload[..STATUS_SNAP_LEN].copy_from_slice(&snap);
+        payload
+    }
+}
+
+pub fn rgb565(r: u8, g: u8, b: u8) -> u16 {
+    (((r as u16) & 0xF8) << 8) | (((g as u16) & 0xFC) << 3) | ((b as u16) >> 3)
+}
+
+pub fn parse_hex_color(s: &str, default: u16) -> u16 {
+    let t = s.trim();
+    if t.is_empty() {
+        return default;
+    }
+    let h = t.strip_prefix('#').unwrap_or(t);
+    let h = if h.len() == 3 {
+        format!(
+            "{}{}{}{}{}{}",
+            h.chars().next().unwrap(),
+            h.chars().next().unwrap(),
+            h.chars().nth(1).unwrap(),
+            h.chars().nth(1).unwrap(),
+            h.chars().nth(2).unwrap(),
+            h.chars().nth(2).unwrap()
+        )
+    } else {
+        h.to_string()
+    };
+    if h.len() != 6 {
+        return default;
+    }
+    let Ok(r) = u8::from_str_radix(&h[0..2], 16) else {
+        return default;
+    };
+    let Ok(g) = u8::from_str_radix(&h[2..4], 16) else {
+        return default;
+    };
+    let Ok(b) = u8::from_str_radix(&h[4..6], 16) else {
+        return default;
+    };
+    rgb565(r, g, b)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sizes() {
+        assert_eq!(PAYLOAD_LEN, 4770);
+        assert_eq!(STATUS_SNAP_LEN, 2211);
+        assert_eq!(StatusStyle::default().pack().len(), 45);
+        assert_eq!(StatusSnap::default().pack().len(), 2211);
+    }
+}

@@ -1,0 +1,5 @@
+# ESP32-C3 USB-Serial-JTAG (303a:1001) → /dev/tty-buddy + systemd nudge.
+
+SUBSYSTEM=="tty", ATTRS{idVendor}=="303a", ATTRS{idProduct}=="1001", \
+  SYMLINK+="tty-buddy", MODE="0660", GROUP="dialout", TAG+="uaccess", TAG+="systemd", \
+  ENV{SYSTEMD_WANTS}="tty-buddy.service"

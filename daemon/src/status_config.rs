@@ -1,0 +1,267 @@
+//! Parse daemon/status.config (INI) into StatusStyle + layout hints.
+
+use std::collections::HashMap;
+use std::fs;
+use std::path::Path;
+use std::time::SystemTime;
+
+use anyhow::Result;
+
+use crate::protocol::{
+    parse_hex_color, StatusStyle, METER_OFF, METER_ON, SEC_LOAD, SEC_NONE, SEC_SWAP,
+    SEC_UPTIME,
+};
+
+#[derive(Debug, Clone)]
+pub struct StatusUiConfig {
+    pub style: StatusStyle,
+    pub date_format: String,
+    pub time_format: String,
+    pub disk_mount: String,
+    pub interfaces: Vec<(String, IpMode)>,
+    pub services_filter: Option<Vec<String>>, // None = all
+    pub mtime: Option<SystemTime>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IpMode {
+    V4,
+    V6,
+}
+
+impl Default for StatusUiConfig {
+    fn default() -> Self {
+        Self {
+            style: StatusStyle::default(),
+            date_format: "%d-%m-%Y".into(),
+            time_format: "%H:%M:%S".into(),
+            disk_mount: "/".into(),
+            interfaces: Vec::new(),
+            services_filter: None,
+            mtime: None,
+        }
+    }
+}
+
+fn strip_inline_comment(s: &str) -> &str {
+    let bytes = s.as_bytes();
+    for i in 0..bytes.len() {
+        if (bytes[i] == b'#' || bytes[i] == b';') && i > 0 && bytes[i - 1].is_ascii_whitespace()
+        {
+            return s[..i].trim_end();
+        }
+    }
+    s
+}
+
+fn parse_ini(text: &str) -> (HashMap<String, HashMap<String, String>>, Vec<(String, String)>) {
+    let mut sections: HashMap<String, HashMap<String, String>> = HashMap::new();
+    let mut iface_order: Vec<(String, String)> = Vec::new();
+    let mut current = String::new();
+    for raw in text.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
+            continue;
+        }
+        if line.starts_with('[') && line.ends_with(']') {
+            current = line[1..line.len() - 1].trim().to_ascii_lowercase();
+            sections.entry(current.clone()).or_default();
+            continue;
+        }
+        if current.is_empty() {
+            continue;
+        }
+        if let Some((k, v)) = line.split_once('=') {
+            let key = k.trim().to_ascii_lowercase();
+            let val = strip_inline_comment(v.trim()).to_string();
+            if current == "interfaces" {
+                iface_order.push((key.clone(), val.clone()));
+            }
+            sections
+                .entry(current.clone())
+                .or_default()
+                .insert(key, val);
+        }
+    }
+    (sections, iface_order)
+}
+
+fn as_bool(s: &str, default: bool) -> bool {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => true,
+        "0" | "false" | "no" | "off" => false,
+        "" => default,
+        _ => default,
+    }
+}
+
+fn sec_id(s: &str) -> u8 {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "uptime" | "up" => SEC_UPTIME,
+        "swap" => SEC_SWAP,
+        "load" => SEC_LOAD,
+        "" | "none" | "blank" => SEC_NONE,
+        _ => SEC_NONE,
+    }
+}
+
+pub fn load_status_config(path: &Path) -> Result<StatusUiConfig> {
+    if !path.is_file() {
+        return Ok(StatusUiConfig::default());
+    }
+    let text = fs::read_to_string(path)?;
+    let mtime = fs::metadata(path).ok().and_then(|m| m.modified().ok());
+    let (sec, iface_order) = parse_ini(&text);
+    let mut cfg = StatusUiConfig {
+        mtime,
+        ..StatusUiConfig::default()
+    };
+    let mut st = StatusStyle::default();
+
+    if let Some(g) = sec.get("globals") {
+        if let Some(v) = g.get("label_color") {
+            st.label_c = parse_hex_color(v, st.label_c);
+        }
+        if let Some(v) = g.get("background") {
+            st.bg_c = parse_hex_color(v, st.bg_c);
+        }
+    }
+    if let Some(h) = sec.get("header") {
+        if let Some(v) = h.get("hostname_color") {
+            st.host_c = parse_hex_color(v, 0xFFFF);
+        }
+        if let Some(v) = h.get("date_color") {
+            st.date_c = parse_hex_color(v, st.date_c);
+        }
+        if let Some(v) = h.get("time_color") {
+            st.time_c = parse_hex_color(v, 0xFFFF);
+        }
+        if let Some(v) = h.get("date_format") {
+            if !v.is_empty() {
+                cfg.date_format = v.clone();
+            }
+        }
+        if let Some(v) = h.get("time_format") {
+            if !v.is_empty() {
+                cfg.time_format = v.clone();
+            }
+        }
+    }
+    if let Some(hero) = sec.get("hero") {
+        st.meter_mode = if as_bool(hero.get("meter_mode").map(|s| s.as_str()).unwrap_or("true"), true)
+        {
+            METER_ON
+        } else {
+            METER_OFF
+        };
+        st.hero_cpu_c = parse_hex_color(hero.get("cpu").map(|s| s.as_str()).unwrap_or(""), 0xFFFF);
+        st.hero_mem_c = parse_hex_color(hero.get("mem").map(|s| s.as_str()).unwrap_or(""), 0xFFFF);
+        st.hero_disk_c = parse_hex_color(hero.get("disk").map(|s| s.as_str()).unwrap_or(""), 0xFFFF);
+        st.level_ok = parse_hex_color(
+            hero.get("level_ok").map(|s| s.as_str()).unwrap_or(""),
+            st.level_ok,
+        );
+        st.level_warn = parse_hex_color(
+            hero.get("level_warn").map(|s| s.as_str()).unwrap_or(""),
+            st.level_warn,
+        );
+        st.level_crit = parse_hex_color(
+            hero.get("level_crit").map(|s| s.as_str()).unwrap_or(""),
+            st.level_crit,
+        );
+        if let Some(v) = hero.get("warn_at") {
+            st.warn_at = v.parse().unwrap_or(60);
+        }
+        if let Some(v) = hero.get("crit_at") {
+            st.crit_at = v.parse().unwrap_or(90);
+        }
+        if let Some(v) = hero.get("disk_mount") {
+            if !v.is_empty() {
+                cfg.disk_mount = v.clone();
+            }
+        }
+    }
+    if let Some(secondary) = sec.get("secondary") {
+        st.sec_left = sec_id(secondary.get("left").map(|s| s.as_str()).unwrap_or(""));
+        st.sec_right = sec_id(secondary.get("right").map(|s| s.as_str()).unwrap_or(""));
+        st.sec_left_c =
+            parse_hex_color(secondary.get("left_color").map(|s| s.as_str()).unwrap_or(""), 0xFFFF);
+        st.sec_right_c =
+            parse_hex_color(secondary.get("right_color").map(|s| s.as_str()).unwrap_or(""), 0xFFFF);
+    }
+    if !iface_order.is_empty() {
+        for (name, mode) in iface_order {
+            let m = match mode.trim().to_ascii_lowercase().as_str() {
+                "v6" | "6" | "ipv6" => IpMode::V6,
+                _ => IpMode::V4,
+            };
+            cfg.interfaces.push((name, m));
+        }
+    } else if let Some(ifaces) = sec.get("interfaces") {
+        for (name, mode) in ifaces {
+            let m = match mode.trim().to_ascii_lowercase().as_str() {
+                "v6" | "6" | "ipv6" => IpMode::V6,
+                _ => IpMode::V4,
+            };
+            cfg.interfaces.push((name.clone(), m));
+        }
+    }
+    if let Some(services) = sec.get("services") {
+        let filter = services.get("filter").map(|s| s.as_str()).unwrap_or("all");
+        let f = filter.trim();
+        if f.is_empty() || f.eq_ignore_ascii_case("all") || f == "*" {
+            cfg.services_filter = None;
+        } else {
+            cfg.services_filter = Some(
+                f.split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect(),
+            );
+        }
+        let def = StatusStyle::default();
+        st.svc_active = parse_hex_color(
+            services.get("active").map(|s| s.as_str()).unwrap_or(""),
+            def.svc_active,
+        );
+        st.svc_failed = parse_hex_color(
+            services.get("failed").map(|s| s.as_str()).unwrap_or(""),
+            def.svc_failed,
+        );
+        st.svc_inactive = parse_hex_color(
+            services.get("inactive").map(|s| s.as_str()).unwrap_or(""),
+            def.svc_inactive,
+        );
+        st.svc_activating = parse_hex_color(
+            services.get("activating").map(|s| s.as_str()).unwrap_or(""),
+            def.svc_activating,
+        );
+        st.svc_reloading = parse_hex_color(
+            services.get("reloading").map(|s| s.as_str()).unwrap_or(""),
+            def.svc_reloading,
+        );
+        st.svc_deactivating = parse_hex_color(
+            services
+                .get("deactivating")
+                .map(|s| s.as_str())
+                .unwrap_or(""),
+            def.svc_deactivating,
+        );
+        st.svc_maintenance = parse_hex_color(
+            services.get("maintenance").map(|s| s.as_str()).unwrap_or(""),
+            def.svc_maintenance,
+        );
+    }
+
+    let _ = ();
+    cfg.style = st;
+    Ok(cfg)
+}
+
+pub fn maybe_reload(path: &Path, current: &StatusUiConfig) -> Option<StatusUiConfig> {
+    let mtime = fs::metadata(path).ok().and_then(|m| m.modified().ok())?;
+    if current.mtime == Some(mtime) {
+        return None;
+    }
+    load_status_config(path).ok()
+}
