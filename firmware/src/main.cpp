@@ -4,7 +4,7 @@
 
 #include "terminal.h"
 
-static constexpr uint32_t LINK_TIMEOUT_MS = 2000;
+static constexpr uint32_t LINK_TIMEOUT_MS = 12000;
 
 static constexpr int PIN_BL = 5;
 static constexpr int PIN_BTN = 10;
@@ -16,9 +16,10 @@ static constexpr int BL_STEPS = 5;
 static constexpr uint8_t BL_DUTY[BL_STEPS] = {51, 102, 153, 204, 255}; // ~20–100%
 
 static constexpr uint32_t BTN_DEBOUNCE_MS = 40;
+static constexpr uint32_t BTN_LONG_MS = 700;
 static constexpr uint32_t OSD_MS = 3000;
 
-// Top-right OSD: cell-aligned hole, drawn flush to the panel edges.
+// OSD sits in the top-right cell grid (covers the 2px right gutter past col 52).
 static constexpr int OSD_COLS = 15;
 static constexpr int OSD_ROWS = 3;
 static constexpr int OSD_CELL_X = TERM_COLS - OSD_COLS;
@@ -43,13 +44,15 @@ static uint32_t osd_until_ms = 0;
 static bool btn_stable = true; // INPUT_PULLUP idle
 static bool btn_raw = true;
 static uint32_t btn_change_ms = 0;
+static uint32_t btn_down_ms = 0;
+static bool btn_long_sent = false;
 
 static void applyBacklight() {
   ledcWrite(BL_PWM_CH, BL_DUTY[bl_step]);
 }
 
 static void paintWaiting() {
-  term.showBanner("Waiting for daemon", "run: tools/tty_bridge.py", TFT_CYAN);
+  term.showBanner("Waiting for daemon", "systemctl start tty-buddy", TFT_CYAN);
 }
 
 static void paintLost() {
@@ -88,7 +91,10 @@ static void hideOsd() {
   tft.fillRect(OSD_X, OSD_Y, OSD_W, OSD_H, TFT_BLACK);
   term.invalidateCells(OSD_CELL_X, OSD_CELL_Y, OSD_COLS, OSD_ROWS);
   if (link_ui == LinkUI::Live) {
-    term.flush();
+    if (term.statusUiActive())
+      term.paintStatusUi();
+    else
+      term.flush();
   } else if (link_ui == LinkUI::Waiting) {
     paintWaiting();
   } else {
@@ -114,11 +120,31 @@ static void pollButton(uint32_t now) {
 
   const bool was_high = btn_stable;
   btn_stable = raw;
+
   if (was_high && !btn_stable) {
+    // Active-low press.
+    btn_down_ms = now;
+    btn_long_sent = false;
+    return;
+  }
+
+  if (!was_high && btn_stable) {
+    if (btn_long_sent)
+      return;
     bl_step = (bl_step + 1) % BL_STEPS;
     applyBacklight();
     showBrightnessOsd();
+    return;
   }
+}
+
+static void pollLongPress(uint32_t now) {
+  if (btn_stable || btn_long_sent)
+    return;
+  if (now - btn_down_ms < BTN_LONG_MS)
+    return;
+  btn_long_sent = true;
+  Serial.write(DEV_MODE_TOGGLE);
 }
 
 void setup() {
@@ -143,6 +169,7 @@ void setup() {
 void loop() {
   uint32_t now = millis();
   pollButton(now);
+  pollLongPress(now);
 
   if (osd_visible && (int32_t)(now - osd_until_ms) >= 0)
     hideOsd();
@@ -157,6 +184,10 @@ void loop() {
     if (got > 0)
       term.ingest(buf, (size_t)got);
   }
+
+  // Status GUI redraws wipe the OSD; restore while it is still open.
+  if (osd_visible && term.statusUiActive())
+    paintOsd();
 
   // lastGoodFrameMs() is stamped during ingest — must not compare against a
   // pre-ingest millis() (unsigned underflow looks like a link timeout).

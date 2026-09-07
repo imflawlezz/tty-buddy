@@ -24,6 +24,7 @@
 
 #define LOAD_GLCD
 #define LOAD_FONT2
+#define LOAD_FONT4
 
 #define SPI_FREQUENCY       40000000
 #define SPI_READ_FREQUENCY  20000000

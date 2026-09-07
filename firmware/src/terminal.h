@@ -3,6 +3,8 @@
 #include <Arduino.h>
 #include <TFT_eSPI.h>
 
+#include "status_ui.h"
+
 // Font 1 (GLCD) 6×8 ASCII + on-device procedural Unicode (box/block/Braille).
 static constexpr int TERM_CELL_W = 6;
 static constexpr int TERM_CELL_H = 8;
@@ -13,15 +15,18 @@ static constexpr int TERM_CELLS = TERM_COLS * TERM_ROWS;
 static constexpr int TERM_PAYLOAD = TERM_CELLS * 3;
 
 // Frame: AA 55 A5 5A | seq | cx | cy | flags | payload | crc16_be
-// flags: bit0 cursor visible, bit1 blink lit, bit7 daemon bye
+// flags: bit0 cursor, bit1 blink, bit5 status GUI snapshot, bit7 bye
 static constexpr uint8_t FRAME_M0 = 0xAA;
 static constexpr uint8_t FRAME_M1 = 0x55;
 static constexpr uint8_t FRAME_M2 = 0xA5;
 static constexpr uint8_t FRAME_M3 = 0x5A;
 static constexpr uint8_t FRAME_ACK = 0x06;
 static constexpr uint8_t FRAME_NAK = 0x15;
+// Device → host: long-press toggles terminal ↔ status (single byte).
+static constexpr uint8_t DEV_MODE_TOGGLE = 0x12;
 static constexpr uint8_t CURSOR_VISIBLE = 0x01;
 static constexpr uint8_t CURSOR_ON = 0x02;
+static constexpr uint8_t FLAG_STATUS = 0x20;
 static constexpr uint8_t FLAG_BYE = 0x80;
 
 class Terminal {
@@ -38,6 +43,8 @@ public:
   bool linked() const { return linked_; }
   bool takeBye();
   uint32_t lastGoodFrameMs() const { return last_good_ms_; }
+  bool statusUiActive() const { return status_ui_; }
+  void paintStatusUi();
 
   int cols() const { return TERM_COLS; }
   int rows() const { return TERM_ROWS; }
@@ -63,6 +70,11 @@ private:
   uint16_t prev_cp_[TERM_ROWS][TERM_COLS]{};
   uint8_t prev_attr_[TERM_ROWS][TERM_COLS]{};
   bool row_dirty_[TERM_ROWS]{};
+
+  StatusSnap status_{};
+  bool status_ui_ = false;
+  bool status_dirty_ = false;
+  bool status_full_paint_ = false;
 
   int8_t cur_x_ = 0, cur_y_ = 0;
   uint8_t cur_flags_ = 0;

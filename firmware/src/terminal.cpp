@@ -322,6 +322,11 @@ void Terminal::reset() {
   linked_ = false;
   bye_ = false;
   last_good_ms_ = 0;
+  status_ui_ = false;
+  status_dirty_ = false;
+  status_full_paint_ = false;
+  statusGuiReset();
+  statusSnapClear(status_);
   invalidateCache();
   if (tft_)
     tft_->fillScreen(TFT_BLACK);
@@ -351,6 +356,10 @@ bool Terminal::takeBye() {
 void Terminal::showBanner(const char *title, const char *subtitle, uint16_t accent) {
   if (!tft_)
     return;
+  status_ui_ = false;
+  status_dirty_ = false;
+  status_full_paint_ = false;
+  statusGuiReset();
   invalidateCache();
   linked_ = false;
   cur_flags_ = 0;
@@ -363,6 +372,14 @@ void Terminal::showBanner(const char *title, const char *subtitle, uint16_t acce
   tft_->drawString(title ? title : "", 2, 2, 1);
   tft_->setTextColor(TFT_DARKGREY, TFT_BLACK);
   tft_->drawString(subtitle ? subtitle : "", 2, 2 + TERM_CELL_H, 1);
+}
+
+void Terminal::paintStatusUi() {
+  if (!tft_ || !status_ui_)
+    return;
+  paintStatusGui(tft_, status_, status_full_paint_);
+  status_full_paint_ = false;
+  status_dirty_ = false;
 }
 
 void Terminal::invalidateCells(int x0, int y0, int cols, int rows) {
@@ -478,6 +495,14 @@ void Terminal::paintCell(int x, int y, bool cursor_block) {
 void Terminal::flush() {
   if (!tft_)
     return;
+  if (status_ui_) {
+    if (status_dirty_ || statusGuiNeedsRoll(status_)) {
+      paintStatusGui(tft_, status_, status_full_paint_);
+      status_full_paint_ = false;
+      status_dirty_ = false;
+    }
+    return;
+  }
   tft_->setTextFont(1);
   tft_->setTextSize(1);
 
@@ -520,6 +545,42 @@ void Terminal::flush() {
 }
 
 void Terminal::applyPayload() {
+  last_good_ms_ = millis();
+  if (rx_flags_ & FLAG_BYE) {
+    bye_ = true;
+    linked_ = false;
+    status_ui_ = false;
+    cur_flags_ = 0;
+    return;
+  }
+
+  if (rx_flags_ & FLAG_STATUS) {
+    StatusSnap next{};
+    if (TERM_PAYLOAD >= sizeof(StatusSnap))
+      memcpy(&next, payload_, sizeof(StatusSnap));
+    if (statusSnapValid(next)) {
+      linked_ = true;
+      cur_flags_ = 0;
+      if (status_ui_ && memcmp(&status_, &next, sizeof(StatusSnap)) == 0)
+        return; // identical snapshot — no redraw (kills flicker on keepalive)
+      const bool entering = !status_ui_;
+      status_ = next;
+      status_ui_ = true;
+      status_dirty_ = true;
+      if (entering)
+        status_full_paint_ = true;
+    }
+    return;
+  }
+
+  const bool leaving_status = status_ui_;
+  status_ui_ = false;
+  if (leaving_status) {
+    statusGuiReset();
+    status_full_paint_ = false;
+    invalidateCache();
+  }
+
   const uint8_t *p = payload_;
   for (int y = 0; y < TERM_ROWS; y++) {
     bool dirty = false;
@@ -538,15 +599,8 @@ void Terminal::applyPayload() {
   }
   cur_x_ = (int8_t)rx_cx_;
   cur_y_ = (int8_t)rx_cy_;
-  cur_flags_ = rx_flags_ & (uint8_t)~FLAG_BYE;
-  last_good_ms_ = millis();
-  if (rx_flags_ & FLAG_BYE) {
-    bye_ = true;
-    linked_ = false;
-    cur_flags_ = 0;
-  } else {
-    linked_ = true;
-  }
+  cur_flags_ = rx_flags_ & (uint8_t)~(FLAG_BYE | FLAG_STATUS);
+  linked_ = true;
 }
 
 void Terminal::ingest(const uint8_t *data, size_t n) {
