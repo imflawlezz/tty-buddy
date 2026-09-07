@@ -1,24 +1,18 @@
 # tty-buddy
 
-ESP32-C3 + ST7789 terminal buddy, with a host daemon and hardware files.
-
-This is a **demo** to evaluate the concept and hardware stack. A Rust daemon migration is under development.
+ESP32-C3 + ST7789 display buddy. Host daemon is Rust.
 
 | Path | Contents |
 |------|----------|
-| [`firmware/`](firmware/) | ESP32 firmware (PlatformIO / Arduino) |
-| [`daemon/`](daemon/) | Host daemon |
-| [`hardware/`](hardware/) | Wiring notes + CAD / enclosure |
+| [`firmware/`](firmware/) | ESP32 firmware (PlatformIO) |
+| [`daemon/`](daemon/) | Rust host daemon + packaging |
+| [`hardware/`](hardware/) | Wiring / CAD |
 
-## Quick start (firmware)
+## What it does
 
-```bash
-cd firmware
-pio run -t upload
-```
+- **Status mode** (default): live host metrics → LCD (`status.config`)
+- **Console mode** (long-press): Linux PTY for `shell_user`
+  - USB keyboard on the **server** is grabbed into that console
+  - Screen is mirrored to the ESP (53×30 VT)
 
-## Quick start (bridge)
-
-```bash
-python3 daemon/tools/tty_bridge.py -p /dev/cu.usbmodem14401
-```
+ESP32-C3 has no USB-host keyboard port — keyboard plugs into the Linux box.
