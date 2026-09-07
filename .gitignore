@@ -15,6 +15,7 @@ firmware/compile_commands.json
 
 # Daemon
 daemon/target/
+daemon/dist/
 **/__pycache__/
 **/*.pyc
 *.egg-info/
