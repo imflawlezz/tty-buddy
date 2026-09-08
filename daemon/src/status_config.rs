@@ -8,8 +8,8 @@ use std::time::SystemTime;
 use anyhow::Result;
 
 use crate::protocol::{
-    parse_hex_color, StatusStyle, AL_CPU, AL_DISK, AL_MEM, AL_SVC_FAILED, AL_SVC_INACTIVE,
-    AL_TEMP, METER_OFF, METER_ON, SEC_LOAD, SEC_NONE, SEC_SWAP, SEC_UPTIME,
+    parse_hex_color, StatusStyle, AL_CPU, AL_DISK, AL_MEM, AL_SVC_FAILED, AL_SVC_INACTIVE, AL_TEMP,
+    METER_OFF, METER_ON, SEC_LOAD, SEC_NONE, SEC_SWAP, SEC_UPTIME,
 };
 
 #[derive(Debug, Clone)]
@@ -296,10 +296,7 @@ pub(crate) fn parse_status_config_from_str(text: &str) -> StatusUiConfig {
             st.alert_bg_c,
         );
         st.alert_fg_c = parse_hex_color(
-            alerts
-                .get("text_color")
-                .map(|s| s.as_str())
-                .unwrap_or(""),
+            alerts.get("text_color").map(|s| s.as_str()).unwrap_or(""),
             st.alert_fg_c,
         );
         if let Some(v) = alerts.get("hold_sec") {
@@ -332,13 +329,19 @@ pub(crate) fn parse_status_config_from_str(text: &str) -> StatusUiConfig {
             mask |= AL_MEM;
         }
         if as_bool(
-            alerts.get("disk_crit").map(|s| s.as_str()).unwrap_or("true"),
+            alerts
+                .get("disk_crit")
+                .map(|s| s.as_str())
+                .unwrap_or("true"),
             true,
         ) {
             mask |= AL_DISK;
         }
         if as_bool(
-            alerts.get("temp_crit").map(|s| s.as_str()).unwrap_or("true"),
+            alerts
+                .get("temp_crit")
+                .map(|s| s.as_str())
+                .unwrap_or("true"),
             true,
         ) {
             mask |= AL_TEMP;
