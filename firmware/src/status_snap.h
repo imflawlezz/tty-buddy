@@ -92,11 +92,11 @@ struct __attribute__((packed)) StatusStyle {
   uint8_t alert_hold_sec;
   uint8_t alert_mask;
   uint8_t alert_temp_c;
-  /// Session-start seed: 1..6 brightness step, 0 = AUTO.
+  /// Brightness step 1..6, or 0 = AUTO (see `OSD_F_AUTO_BRIGHT`).
   uint8_t osd_default_bright_pct;
-  /// Session-start seed: 0 = never, 1..6 = sleep level.
+  /// Sleep: 0 = never, 1..6 = level (device maps to seconds).
   uint16_t osd_sleep_timeout_s;
-  /// `OSD_F_*` bits (live); seeds above apply once per boot.
+  /// `OSD_F_*` bits; applied live with bright/sleep fields.
   uint8_t osd_flags;
   /// AUTO daytime brightness step 1..6 (pct name kept for wire layout).
   uint8_t osd_auto_day_pct;

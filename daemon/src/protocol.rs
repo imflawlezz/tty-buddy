@@ -10,9 +10,13 @@ pub const FRAME_MAGIC: [u8; 4] = [0xAA, 0x55, 0xA5, 0x5A];
 pub const FRAME_ACK: u8 = 0x06;
 pub const FRAME_NAK: u8 = 0x15;
 pub const DEV_MODE_TOGGLE: u8 = 0x12;
+pub const DEV_OSD_BRIGHT: u8 = 0x13; // +1 byte: 0=auto, 1..6
+pub const DEV_OSD_SLEEP: u8 = 0x14; // +1 byte: 0=never, 1..6
 
 pub const FLAG_CURSOR_VISIBLE: u8 = 0x01;
 pub const FLAG_CURSOR_ON: u8 = 0x02;
+pub const FLAG_ACTIVITY: u8 = 0x04;
+pub const FLAG_STYLE: u8 = 0x10;
 pub const FLAG_STATUS: u8 = 0x20;
 pub const FLAG_BYE: u8 = 0x80;
 
@@ -123,11 +127,11 @@ pub struct StatusStyle {
     /// `AL_*` bits; 0 = off.
     pub alert_mask: u8,
     pub alert_temp_c: u8,
-    /// Session-start seed: 1..6 brightness step, 0 = AUTO.
+    /// Brightness step 1..6, or 0 = AUTO (see `OSD_F_AUTO_BRIGHT`).
     pub osd_default_bright_pct: u8,
-    /// Session-start seed: 0 = never, 1..6 = sleep level.
+    /// Sleep: 0 = never, 1..6 = level (device maps to seconds).
     pub osd_sleep_timeout_s: u16,
-    /// `OSD_F_*` bits (live); seeds above apply once per boot.
+    /// `OSD_F_*` bits; applied live with bright/sleep fields.
     pub osd_flags: u8,
     /// AUTO daytime brightness step 1..6 (pct name kept for wire layout).
     pub osd_auto_day_pct: u8,
