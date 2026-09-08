@@ -496,7 +496,9 @@ void Terminal::flush() {
   if (!tft_)
     return;
   if (status_ui_) {
-    if (status_dirty_ || statusGuiNeedsRoll(status_)) {
+    // Evaluate marquee even when status_dirty_ is set (|| would skip it).
+    const bool roll = statusGuiNeedsRoll(status_);
+    if (status_dirty_ || roll) {
       paintStatusGui(tft_, status_, status_full_paint_);
       status_full_paint_ = false;
       status_dirty_ = false;

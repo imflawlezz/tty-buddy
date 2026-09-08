@@ -11,7 +11,7 @@ use chrono::Local;
 use crate::protocol::{
     StatusIface, StatusSnap, StatusSvc, ST_F_HAS_CPU, ST_F_HAS_DISK, ST_F_HAS_MEM, ST_F_HAS_TEMP,
     ST_SVC_ACTIVATING, ST_SVC_ACTIVE, ST_SVC_DEACTIVATING, ST_SVC_FAILED, ST_SVC_INACTIVE,
-    ST_SVC_MAINTENANCE, ST_SVC_RELOADING, SVC_COUNT,
+    ST_SVC_MAINTENANCE, ST_SVC_RELOADING, SVC_COUNT, SVC_NAME_LEN,
 };
 use crate::status_config::{IpMode, StatusUiConfig};
 
@@ -314,37 +314,39 @@ fn read_netdev() -> HashMap<String, (u64, u64)> {
 }
 
 fn iface_ip(name: &str, mode: IpMode) -> Option<String> {
+    match mode {
+        IpMode::V4 => iface_ip_family(name, false),
+        IpMode::V6 => iface_ip_family(name, true),
+        IpMode::Auto => iface_ip_family(name, false)
+            .or_else(|| iface_ip_family(name, true)),
+    }
+}
+
+fn iface_ip_family(name: &str, v6: bool) -> Option<String> {
     let out = Command::new("ip")
-        .args(["-o", if mode == IpMode::V6 { "-6" } else { "-4" }, "addr", "show", "dev", name])
+        .args(["-o", if v6 { "-6" } else { "-4" }, "addr", "show", "dev", name])
         .output()
         .ok()?;
     let text = String::from_utf8_lossy(&out.stdout);
+    let mut link_local: Option<String> = None;
     for line in text.lines() {
         let mut parts = line.split_whitespace();
         while let Some(p) = parts.next() {
             if p == "inet" || p == "inet6" {
                 if let Some(addr) = parts.next() {
-                    let addr = addr.split('/').next().unwrap_or(addr);
-                    if mode == IpMode::V6 && addr.starts_with("fe80:") {
+                    let addr = addr.split('/').next().unwrap_or(addr).to_string();
+                    if v6 && addr.starts_with("fe80:") {
+                        if link_local.is_none() {
+                            link_local = Some(addr);
+                        }
                         continue;
                     }
-                    return Some(addr.to_string());
+                    return Some(addr);
                 }
             }
         }
     }
-    // No global address: accept link-local as last resort.
-    for line in text.lines() {
-        let mut parts = line.split_whitespace();
-        while let Some(p) = parts.next() {
-            if p == "inet" || p == "inet6" {
-                if let Some(addr) = parts.next() {
-                    return Some(addr.split('/').next().unwrap_or(addr).to_string());
-                }
-            }
-        }
-    }
-    None
+    link_local
 }
 
 fn normalize_svc_status(active: &str) -> u8 {
@@ -397,7 +399,7 @@ fn collect_services(filter: Option<&[String]>) -> Vec<StatusSvc> {
         // systemctl --plain: UNIT LOAD ACTIVE SUB …
         let active = cols[2];
         services.push(StatusSvc {
-            name: name.chars().take(12).collect(),
+            name: name.chars().take(SVC_NAME_LEN).collect(),
             status: normalize_svc_status(active),
         });
         if services.len() >= SVC_COUNT {

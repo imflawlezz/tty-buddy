@@ -19,7 +19,7 @@ pub struct StatusUiConfig {
     pub time_format: String,
     pub disk_mount: String,
     pub interfaces: Vec<(String, IpMode)>,
-    pub services_filter: Option<Vec<String>>, // None = all
+    pub services_filter: Option<Vec<String>>,
     pub mtime: Option<SystemTime>,
 }
 
@@ -27,6 +27,8 @@ pub struct StatusUiConfig {
 pub enum IpMode {
     V4,
     V6,
+    /// Prefer IPv4, else global IPv6, else link-local.
+    Auto,
 }
 
 impl Default for StatusUiConfig {
@@ -122,7 +124,7 @@ pub fn load_status_config(path: &Path) -> Result<StatusUiConfig> {
         if let Some(v) = g.get("label_color") {
             st.label_c = parse_hex_color(v, st.label_c);
         }
-        if let Some(v) = g.get("background") {
+        if let Some(v) = g.get("background_color").or_else(|| g.get("background")) {
             st.bg_c = parse_hex_color(v, st.bg_c);
         }
     }
@@ -154,19 +156,52 @@ pub fn load_status_config(path: &Path) -> Result<StatusUiConfig> {
         } else {
             METER_OFF
         };
-        st.hero_cpu_c = parse_hex_color(hero.get("cpu").map(|s| s.as_str()).unwrap_or(""), 0xFFFF);
-        st.hero_mem_c = parse_hex_color(hero.get("mem").map(|s| s.as_str()).unwrap_or(""), 0xFFFF);
-        st.hero_disk_c = parse_hex_color(hero.get("disk").map(|s| s.as_str()).unwrap_or(""), 0xFFFF);
+        st.hero_cpu_c = parse_hex_color(
+            hero
+                .get("cpu_color")
+                .or_else(|| hero.get("cpu"))
+                .map(|s| s.as_str())
+                .unwrap_or(""),
+            0xFFFF,
+        );
+        st.hero_mem_c = parse_hex_color(
+            hero
+                .get("mem_color")
+                .or_else(|| hero.get("mem"))
+                .map(|s| s.as_str())
+                .unwrap_or(""),
+            0xFFFF,
+        );
+        st.hero_disk_c = parse_hex_color(
+            hero
+                .get("disk_color")
+                .or_else(|| hero.get("disk"))
+                .map(|s| s.as_str())
+                .unwrap_or(""),
+            0xFFFF,
+        );
         st.level_ok = parse_hex_color(
-            hero.get("level_ok").map(|s| s.as_str()).unwrap_or(""),
+            hero
+                .get("level_ok_color")
+                .or_else(|| hero.get("level_ok"))
+                .map(|s| s.as_str())
+                .unwrap_or(""),
             st.level_ok,
         );
         st.level_warn = parse_hex_color(
-            hero.get("level_warn").map(|s| s.as_str()).unwrap_or(""),
+            hero
+                .get("level_warn_color")
+                .or_else(|| hero.get("level_warn"))
+                .map(|s| s.as_str())
+                .unwrap_or(""),
             st.level_warn,
         );
         st.level_crit = parse_hex_color(
-            hero.get("level_crit").map(|s| s.as_str()).unwrap_or(""),
+            hero
+                .get("level_crit_color")
+                .or_else(|| hero.get("level_crit"))
+                .map(|s| s.as_str())
+                .unwrap_or(""),
             st.level_crit,
         );
         if let Some(v) = hero.get("warn_at") {
@@ -193,6 +228,7 @@ pub fn load_status_config(path: &Path) -> Result<StatusUiConfig> {
         for (name, mode) in iface_order {
             let m = match mode.trim().to_ascii_lowercase().as_str() {
                 "v6" | "6" | "ipv6" => IpMode::V6,
+                "auto" | "any" | "both" => IpMode::Auto,
                 _ => IpMode::V4,
             };
             cfg.interfaces.push((name, m));
@@ -201,6 +237,7 @@ pub fn load_status_config(path: &Path) -> Result<StatusUiConfig> {
         for (name, mode) in ifaces {
             let m = match mode.trim().to_ascii_lowercase().as_str() {
                 "v6" | "6" | "ipv6" => IpMode::V6,
+                "auto" | "any" | "both" => IpMode::Auto,
                 _ => IpMode::V4,
             };
             cfg.interfaces.push((name.clone(), m));
@@ -220,40 +257,26 @@ pub fn load_status_config(path: &Path) -> Result<StatusUiConfig> {
             );
         }
         let def = StatusStyle::default();
-        st.svc_active = parse_hex_color(
-            services.get("active").map(|s| s.as_str()).unwrap_or(""),
-            def.svc_active,
-        );
-        st.svc_failed = parse_hex_color(
-            services.get("failed").map(|s| s.as_str()).unwrap_or(""),
-            def.svc_failed,
-        );
-        st.svc_inactive = parse_hex_color(
-            services.get("inactive").map(|s| s.as_str()).unwrap_or(""),
-            def.svc_inactive,
-        );
-        st.svc_activating = parse_hex_color(
-            services.get("activating").map(|s| s.as_str()).unwrap_or(""),
-            def.svc_activating,
-        );
-        st.svc_reloading = parse_hex_color(
-            services.get("reloading").map(|s| s.as_str()).unwrap_or(""),
-            def.svc_reloading,
-        );
-        st.svc_deactivating = parse_hex_color(
-            services
-                .get("deactivating")
-                .map(|s| s.as_str())
-                .unwrap_or(""),
-            def.svc_deactivating,
-        );
-        st.svc_maintenance = parse_hex_color(
-            services.get("maintenance").map(|s| s.as_str()).unwrap_or(""),
-            def.svc_maintenance,
-        );
+        let svc_color = |key_new: &str, key_old: &str, default: u16| {
+            parse_hex_color(
+                services
+                    .get(key_new)
+                    .or_else(|| services.get(key_old))
+                    .map(|s| s.as_str())
+                    .unwrap_or(""),
+                default,
+            )
+        };
+        st.svc_active = svc_color("active_color", "active", def.svc_active);
+        st.svc_failed = svc_color("failed_color", "failed", def.svc_failed);
+        st.svc_inactive = svc_color("inactive_color", "inactive", def.svc_inactive);
+        st.svc_activating = svc_color("activating_color", "activating", def.svc_activating);
+        st.svc_reloading = svc_color("reloading_color", "reloading", def.svc_reloading);
+        st.svc_deactivating =
+            svc_color("deactivating_color", "deactivating", def.svc_deactivating);
+        st.svc_maintenance = svc_color("maintenance_color", "maintenance", def.svc_maintenance);
     }
 
-    let _ = ();
     cfg.style = st;
     Ok(cfg)
 }

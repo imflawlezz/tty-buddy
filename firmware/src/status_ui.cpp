@@ -6,57 +6,91 @@
   (uint16_t)((((r) & 0xF8) << 8) | (((g) & 0xFC) << 3) | ((b) >> 3))
 
 static constexpr uint16_t COL_BG_DEFAULT = TFT_BLACK;
-static constexpr uint16_t COL_LABEL_DEFAULT = RGB565(0x6B, 0x7C, 0x8F);
-static constexpr uint16_t COL_MUTED = RGB565(0xA8, 0xB4, 0xC0);
+static constexpr uint16_t COL_LABEL_DEFAULT = RGB565(0x88, 0x88, 0x88);
+static constexpr uint16_t COL_MUTED = RGB565(0x88, 0x88, 0x88);
 static constexpr uint16_t COL_WHITE = TFT_WHITE;
-static constexpr uint16_t COL_RX = RGB565(0x81, 0xC7, 0x84);
-static constexpr uint16_t COL_TX = RGB565(0xE0, 0xC0, 0x6A);
+static constexpr uint16_t COL_RX = RGB565(0x33, 0xAA, 0x33);
+static constexpr uint16_t COL_TX = RGB565(0xCC, 0xAA, 0x33);
 
 static uint16_t g_bg = COL_BG_DEFAULT;
 static uint16_t g_label = COL_LABEL_DEFAULT;
-
-static constexpr uint8_t DIRTY_HEADER = 1 << 0;
-static constexpr uint8_t DIRTY_HERO = 1 << 1;
-static constexpr uint8_t DIRTY_SECONDARY = 1 << 2;
-static constexpr uint8_t DIRTY_NET = 1 << 3;
-static constexpr uint8_t DIRTY_SERVICES = 1 << 4;
-static constexpr uint8_t DIRTY_ALL = 0x1F;
 
 static StatusSnap g_prev{};
 static StatusLayout g_prev_layout{};
 static bool g_have_prev = false;
 static bool g_chrome = false;
-static int g_prev_iface_n = 0;
-static int g_prev_svc_y = -1;
-static int g_prev_svc_n = 0;
 
-static constexpr uint8_t ROLL_NAME = 0;
-static constexpr uint8_t ROLL_IP = 1;
+static char g_s_host[25]{};
+static char g_s_date[21]{};
+static char g_s_time[13]{};
+static char g_s_cpu[8]{};
+static char g_s_temp[16]{};
+static char g_s_mem[8]{};
+static char g_s_mem_sub[24]{};
+static char g_s_disk[8]{};
+static char g_s_disk_sub[24]{};
+static char g_s_sec_l[40]{};
+static char g_s_sec_r[40]{};
+static uint16_t g_c_cpu = 0, g_c_mem = 0, g_c_disk = 0;
+
+static char g_s_if_name[STATUS_IFACE_COUNT][IFACE_NAME_SHOW + 1]{};
+static char g_s_if_ip[STATUS_IFACE_COUNT][IFACE_IP_SHOW + 1]{};
+static char g_s_if_rx[STATUS_IFACE_COUNT][12]{};
+static char g_s_if_tx[STATUS_IFACE_COUNT][12]{};
+static int g_drawn_iface_n = 0;
+
+// Shared marquee offset for overflowing name/IP slots (short strings ignore it).
+// Separate NAME/IP phases left long IPs stuck at offset 0.
+static constexpr uint32_t ROLL_STEP_MS = 500;
+static constexpr uint32_t ROLL_PAUSE_MS = 2500;
 static uint16_t g_roll_off = 0;
 static int8_t g_roll_dir = 1;
-static uint8_t g_roll_phase = ROLL_NAME;
 static uint32_t g_roll_step_ms = 0;
 static uint32_t g_roll_pause_until = 0;
+static uint16_t g_roll_painted_off = 0xFFFF;
+
+static constexpr int FONT1_H = 8;
+static constexpr int FONT1_W = 6;
+static constexpr int FONT4_H = 28;
+static constexpr int HERO_COL_W = 100;
+
+static void resetRoll() {
+  g_roll_off = 0;
+  g_roll_dir = 1;
+  g_roll_step_ms = 0;
+  g_roll_pause_until = 0;
+  g_roll_painted_off = 0xFFFF;
+}
 
 void statusGuiReset() {
   g_have_prev = false;
   g_chrome = false;
-  g_prev_iface_n = 0;
-  g_prev_svc_y = -1;
-  g_prev_svc_n = 0;
-  g_roll_off = 0;
-  g_roll_dir = 1;
-  g_roll_phase = ROLL_NAME;
-  g_roll_step_ms = 0;
-  g_roll_pause_until = 0;
+  g_drawn_iface_n = 0;
   g_bg = COL_BG_DEFAULT;
   g_label = COL_LABEL_DEFAULT;
+  resetRoll();
   memset(&g_prev, 0, sizeof(g_prev));
   memset(&g_prev_layout, 0, sizeof(g_prev_layout));
+  memset(g_s_host, 0, sizeof(g_s_host));
+  memset(g_s_date, 0, sizeof(g_s_date));
+  memset(g_s_time, 0, sizeof(g_s_time));
+  memset(g_s_cpu, 0, sizeof(g_s_cpu));
+  memset(g_s_temp, 0, sizeof(g_s_temp));
+  memset(g_s_mem, 0, sizeof(g_s_mem));
+  memset(g_s_mem_sub, 0, sizeof(g_s_mem_sub));
+  memset(g_s_disk, 0, sizeof(g_s_disk));
+  memset(g_s_disk_sub, 0, sizeof(g_s_disk_sub));
+  memset(g_s_sec_l, 0, sizeof(g_s_sec_l));
+  memset(g_s_sec_r, 0, sizeof(g_s_sec_r));
+  memset(g_s_if_name, 0, sizeof(g_s_if_name));
+  memset(g_s_if_ip, 0, sizeof(g_s_if_ip));
+  memset(g_s_if_rx, 0, sizeof(g_s_if_rx));
+  memset(g_s_if_tx, 0, sizeof(g_s_if_tx));
+  g_c_cpu = g_c_mem = g_c_disk = 0;
 }
 
 static void applyTheme(const StatusStyle &st) {
-  g_bg = st.bg_c; // black is a valid value (0)
+  g_bg = st.bg_c;
   g_label = st.label_c ? st.label_c : COL_LABEL_DEFAULT;
 }
 
@@ -76,7 +110,8 @@ static void drawText1(TFT_eSPI *tft, int x, int y, const char *t, uint16_t col) 
 static void drawBig(TFT_eSPI *tft, int x, int y, const char *t, uint16_t col) {
   tft->setTextDatum(TL_DATUM);
   tft->setTextFont(4);
-  tft->setTextColor(col, g_bg);
+  // Transparent text: Font4's opaque bg padding punches neighbouring chrome.
+  tft->setTextColor(col);
   tft->drawString(t, x, y, 4);
 }
 
@@ -87,6 +122,14 @@ static size_t cstrLen(const char *s, size_t max_n) {
   return i;
 }
 
+static void copyCapped(char *dst, size_t dst_n, const char *src, size_t src_n) {
+  size_t i = 0;
+  for (; i + 1 < dst_n && i < src_n && src[i]; i++)
+    dst[i] = src[i];
+  dst[i] = 0;
+}
+
+/** Substring window; strings shorter than `show` ignore `off`. */
 static void rollWindow(char *dst, size_t show, const char *src, size_t src_n,
                        uint16_t off) {
   size_t len = cstrLen(src, src_n);
@@ -103,6 +146,67 @@ static void rollWindow(char *dst, size_t show, const char *src, size_t src_n,
   for (size_t i = 0; i < show; i++)
     dst[i] = src[off + i];
   dst[show] = 0;
+}
+
+static size_t rollExtraName(const StatusSnap &s) {
+  size_t extra = 0;
+  const int n = statusIfaceCount(s);
+  for (int i = 0; i < n; i++) {
+    size_t nl = cstrLen(s.ifaces[i].name, IFACE_NAME_WIRE);
+    if (nl > IFACE_NAME_SHOW && nl - IFACE_NAME_SHOW > extra)
+      extra = nl - IFACE_NAME_SHOW;
+  }
+  return extra;
+}
+
+static size_t rollExtraIp(const StatusSnap &s) {
+  size_t extra = 0;
+  const int n = statusIfaceCount(s);
+  for (int i = 0; i < n; i++) {
+    size_t il = cstrLen(s.ifaces[i].ip, IFACE_IP_WIRE);
+    if (il > IFACE_IP_SHOW && il - IFACE_IP_SHOW > extra)
+      extra = il - IFACE_IP_SHOW;
+  }
+  return extra;
+}
+
+static size_t rollExtraMax(const StatusSnap &s) {
+  const size_t a = rollExtraName(s);
+  const size_t b = rollExtraIp(s);
+  return a > b ? a : b;
+}
+
+static bool advanceRoll(uint32_t now, const StatusSnap &s) {
+  const size_t extra = rollExtraMax(s);
+  if (extra == 0) {
+    if (g_roll_off != 0) {
+      g_roll_off = 0;
+      g_roll_dir = 1;
+      return true;
+    }
+    return false;
+  }
+  if ((int32_t)(now - g_roll_pause_until) < 0)
+    return false;
+  if (g_roll_step_ms != 0 && (now - g_roll_step_ms) < ROLL_STEP_MS)
+    return false;
+  g_roll_step_ms = now;
+
+  int next = (int)g_roll_off + g_roll_dir;
+  if (next <= 0) {
+    g_roll_off = 0;
+    g_roll_dir = 1;
+    g_roll_pause_until = now + ROLL_PAUSE_MS;
+    return true;
+  }
+  if ((size_t)next >= extra) {
+    g_roll_off = (uint16_t)extra;
+    g_roll_dir = -1;
+    g_roll_pause_until = now + ROLL_PAUSE_MS;
+    return true;
+  }
+  g_roll_off = (uint16_t)next;
+  return true;
 }
 
 static void fmtRate(char *buf, size_t n, uint32_t bps) {
@@ -141,10 +245,10 @@ static void fmtGb(char *buf, size_t n, uint32_t mb) {
 
 static uint16_t levelColor(const StatusStyle &st, uint8_t pct) {
   if (pct >= st.crit_at)
-    return st.level_crit ? st.level_crit : RGB565(0xE5, 0x73, 0x73);
+    return st.level_crit ? st.level_crit : RGB565(0xCC, 0x33, 0x33);
   if (pct >= st.warn_at)
-    return st.level_warn ? st.level_warn : RGB565(0xE0, 0xC0, 0x6A);
-  return st.level_ok ? st.level_ok : RGB565(0x81, 0xC7, 0x84);
+    return st.level_warn ? st.level_warn : RGB565(0xCC, 0xCC, 0x33);
+  return st.level_ok ? st.level_ok : RGB565(0x33, 0xAA, 0x33);
 }
 
 static uint16_t heroMeterColor(const StatusSnap &s, uint8_t which, uint8_t pct) {
@@ -162,15 +266,15 @@ static uint16_t heroMeterColor(const StatusSnap &s, uint8_t which, uint8_t pct) 
 static uint16_t svcColor(const StatusStyle &st, uint8_t status) {
   switch (status) {
   case ST_SVC_ACTIVE:
-    return st.svc_active ? st.svc_active : RGB565(0x81, 0xC7, 0x84);
+    return st.svc_active ? st.svc_active : RGB565(0x33, 0xAA, 0x33);
   case ST_SVC_FAILED:
-    return st.svc_failed ? st.svc_failed : RGB565(0xE5, 0x73, 0x73);
+    return st.svc_failed ? st.svc_failed : RGB565(0xCC, 0x33, 0x33);
   case ST_SVC_DEACTIVATING:
-    return st.svc_deactivating ? st.svc_deactivating : RGB565(0xE0, 0xC0, 0x6A);
+    return st.svc_deactivating ? st.svc_deactivating : RGB565(0xCC, 0xAA, 0x33);
   case ST_SVC_ACTIVATING:
-    return st.svc_activating ? st.svc_activating : RGB565(0x4D, 0xD0, 0xE1);
+    return st.svc_activating ? st.svc_activating : RGB565(0x33, 0x99, 0xCC);
   case ST_SVC_RELOADING:
-    return st.svc_reloading ? st.svc_reloading : RGB565(0x4D, 0xD0, 0xE1);
+    return st.svc_reloading ? st.svc_reloading : RGB565(0x33, 0x99, 0xCC);
   case ST_SVC_INACTIVE:
     return st.svc_inactive ? st.svc_inactive : COL_MUTED;
   default:
@@ -216,84 +320,10 @@ static void fmtSecValue(char *buf, size_t n, const StatusSnap &s, uint8_t id) {
   }
 }
 
-static size_t rollExtraName(const StatusSnap &s) {
-  size_t extra = 0;
-  const int n = statusIfaceCount(s);
-  for (int i = 0; i < n; i++) {
-    size_t nl = cstrLen(s.ifaces[i].name, IFACE_NAME_WIRE);
-    if (nl > IFACE_NAME_SHOW && nl - IFACE_NAME_SHOW > extra)
-      extra = nl - IFACE_NAME_SHOW;
-  }
-  return extra;
-}
-
-static size_t rollExtraIp(const StatusSnap &s) {
-  size_t extra = 0;
-  const int n = statusIfaceCount(s);
-  for (int i = 0; i < n; i++) {
-    size_t il = cstrLen(s.ifaces[i].ip, IFACE_IP_WIRE);
-    if (il > IFACE_IP_SHOW && il - IFACE_IP_SHOW > extra)
-      extra = il - IFACE_IP_SHOW;
-  }
-  return extra;
-}
-
 bool statusGuiNeedsRoll(const StatusSnap &s) {
-  return rollExtraName(s) > 0 || rollExtraIp(s) > 0;
-}
-
-static void pickRollPhase(const StatusSnap &s) {
-  const size_t n_ex = rollExtraName(s);
-  const size_t i_ex = rollExtraIp(s);
-  if (g_roll_phase == ROLL_NAME) {
-    if (i_ex > 0)
-      g_roll_phase = ROLL_IP;
-  } else {
-    if (n_ex > 0)
-      g_roll_phase = ROLL_NAME;
-  }
-  g_roll_off = 0;
-  g_roll_dir = 1;
-}
-
-static bool advanceRoll(uint32_t now, const StatusSnap &s) {
-  size_t extra =
-      (g_roll_phase == ROLL_NAME) ? rollExtraName(s) : rollExtraIp(s);
-  if (extra == 0) {
-    const uint8_t prev = g_roll_phase;
-    pickRollPhase(s);
-    extra = (g_roll_phase == ROLL_NAME) ? rollExtraName(s) : rollExtraIp(s);
-    if (extra == 0) {
-      if (g_roll_off != 0) {
-        g_roll_off = 0;
-        return true;
-      }
-      return g_roll_phase != prev;
-    }
-  }
-  if ((int32_t)(now - g_roll_pause_until) < 0)
+  if (rollExtraMax(s) == 0)
     return false;
-  if (g_roll_step_ms != 0 && (now - g_roll_step_ms) < 320)
-    return false;
-  g_roll_step_ms = now;
-  int next = (int)g_roll_off + g_roll_dir;
-  if (next <= 0) {
-    const bool finished = (g_roll_dir < 0);
-    g_roll_off = 0;
-    g_roll_dir = 1;
-    g_roll_pause_until = now + 800;
-    if (finished)
-      pickRollPhase(s);
-    return true;
-  }
-  if ((size_t)next >= extra) {
-    g_roll_off = (uint16_t)extra;
-    g_roll_dir = -1;
-    g_roll_pause_until = now + 800;
-    return true;
-  }
-  g_roll_off = (uint16_t)next;
-  return true;
+  return advanceRoll(millis(), s);
 }
 
 static bool styleChanged(const StatusSnap &a, const StatusSnap &b) {
@@ -306,180 +336,231 @@ static bool layoutChanged(const StatusLayout &a, const StatusLayout &b) {
          a.secondary != b.secondary || a.iface_n != b.iface_n;
 }
 
-static uint8_t computeDirty(const StatusSnap &s, const StatusLayout &L,
-                            bool force, bool roll_tick) {
-  if (force || !g_have_prev || styleChanged(s, g_prev) ||
-      layoutChanged(L, g_prev_layout))
-    return DIRTY_ALL;
-
-  uint8_t d = 0;
-  if (memcmp(s.hostname, g_prev.hostname, sizeof(s.hostname)) != 0 ||
-      memcmp(s.date, g_prev.date, sizeof(s.date)) != 0 ||
-      memcmp(s.time, g_prev.time, sizeof(s.time)) != 0)
-    d |= DIRTY_HEADER;
-
-  if (s.cpu_pct != g_prev.cpu_pct || s.mem_pct != g_prev.mem_pct ||
-      s.disk_pct != g_prev.disk_pct || s.cpu_temp_c10 != g_prev.cpu_temp_c10 ||
-      s.mem_used_mb != g_prev.mem_used_mb ||
-      s.mem_total_mb != g_prev.mem_total_mb ||
-      s.disk_used_mb != g_prev.disk_used_mb ||
-      s.disk_total_mb != g_prev.disk_total_mb ||
-      (s.flags & (ST_F_HAS_CPU | ST_F_HAS_MEM | ST_F_HAS_DISK | ST_F_HAS_TEMP)) !=
-          (g_prev.flags &
-           (ST_F_HAS_CPU | ST_F_HAS_MEM | ST_F_HAS_DISK | ST_F_HAS_TEMP)))
-    d |= DIRTY_HERO;
-
-  if (L.secondary) {
-    if (s.uptime_sec != g_prev.uptime_sec || s.swap_pct != g_prev.swap_pct ||
-        s.swap_used_mb != g_prev.swap_used_mb ||
-        s.swap_total_mb != g_prev.swap_total_mb ||
-        s.load_x100[0] != g_prev.load_x100[0] ||
-        s.load_x100[1] != g_prev.load_x100[1] ||
-        s.load_x100[2] != g_prev.load_x100[2] || s.cpu_pct != g_prev.cpu_pct ||
-        s.mem_pct != g_prev.mem_pct || s.disk_pct != g_prev.disk_pct)
-      d |= DIRTY_SECONDARY;
+static bool servicesEqual(const StatusSnap &a, const StatusSnap &b) {
+  const int n = statusSvcCount(a);
+  if (n != statusSvcCount(b))
+    return false;
+  for (int i = 0; i < n; i++) {
+    if (a.services[i].status != b.services[i].status ||
+        memcmp(a.services[i].name, b.services[i].name, STATUS_SVC_NAME) != 0)
+      return false;
   }
-
-  if (memcmp(s.ifaces, g_prev.ifaces, sizeof(s.ifaces)) != 0 || roll_tick)
-    d |= DIRTY_NET;
-
-  if (memcmp(s.services, g_prev.services, sizeof(s.services)) != 0)
-    d |= DIRTY_SERVICES;
-
-  return d;
+  return true;
 }
 
-static void paintHeader(TFT_eSPI *tft, const StatusSnap &s,
-                        const StatusLayout &L) {
-  char host[25], date[21], tim[13];
-  memcpy(host, s.hostname, 24);
-  host[24] = 0;
-  memcpy(date, s.date, 20);
-  date[20] = 0;
-  memcpy(tim, s.time, 12);
-  tim[12] = 0;
-
-  clearRect(tft, 0, 0, 320, L.header_h);
-  drawText1(tft, 4, 4, host[0] ? host : "host",
-            s.style.host_c ? s.style.host_c : COL_WHITE);
-
-  tft->setTextDatum(TR_DATUM);
-  tft->setTextFont(1);
-  const char *t = tim[0] ? tim : "--:--:--";
-  const char *d = date[0] ? date : "--/--/----";
-  int tw = tft->textWidth(t, 1);
-  tft->setTextColor(s.style.time_c ? s.style.time_c : COL_WHITE, g_bg);
-  tft->drawString(t, 316, 4, 1);
-  tft->setTextColor(s.style.date_c ? s.style.date_c : g_label, g_bg);
-  tft->drawString(d, 316 - tw - 6, 4, 1);
-  tft->setTextDatum(TL_DATUM);
+static bool paintSlot1(TFT_eSPI *tft, int x, int y, int slot_w, char *cache,
+                       size_t cache_n, const char *text, uint16_t col,
+                       bool force) {
+  if (!force && strncmp(cache, text, cache_n) == 0)
+    return false;
+  clearRect(tft, x, y, slot_w, FONT1_H);
+  drawText1(tft, x, y, text, col);
+  strncpy(cache, text, cache_n - 1);
+  cache[cache_n - 1] = 0;
+  return true;
 }
 
-static void paintHero(TFT_eSPI *tft, const StatusSnap &s, const StatusLayout &L) {
-  char line[32];
-  char a[12], b[12];
-  const int top = L.y_hero_label;
-  const int bot = L.secondary ? L.y_secondary : L.y_net0;
-  clearRect(tft, 0, top, 320, bot - top);
+static bool paintSlotBig(TFT_eSPI *tft, int x, int y, int slot_w, char *cache,
+                         size_t cache_n, const char *text, uint16_t col,
+                         uint16_t *col_cache, bool force) {
+  if (!force && strncmp(cache, text, cache_n) == 0 && *col_cache == col)
+    return false;
+  clearRect(tft, x, y, slot_w, FONT4_H);
+  drawBig(tft, x, y, text, col);
+  strncpy(cache, text, cache_n - 1);
+  cache[cache_n - 1] = 0;
+  *col_cache = col;
+  return true;
+}
 
-  // Font1 labels, placed below the header strip so they are not cropped.
+static void paintHeroLabels(TFT_eSPI *tft, const StatusLayout &L) {
   drawText1(tft, 6, L.y_hero_label, "CPU", g_label);
   drawText1(tft, 112, L.y_hero_label, "MEM", g_label);
   drawText1(tft, 218, L.y_hero_label, "DISK", g_label);
+  drawText1(tft, 6, L.y_hero_sub, "TEMP:", g_label);
+}
 
-  if (s.flags & ST_F_HAS_CPU) {
+static void paintChrome(TFT_eSPI *tft, const StatusSnap &s,
+                        const StatusLayout &L) {
+  paintHeroLabels(tft, L);
+
+  if (L.secondary) {
+    if (s.style.sec_left != SEC_NONE)
+      drawText1(tft, 6, L.y_secondary, secLabel(s.style.sec_left), g_label);
+    if (s.style.sec_right != SEC_NONE)
+      drawText1(tft, 168, L.y_secondary, secLabel(s.style.sec_right), g_label);
+  }
+
+  for (int i = 0; i < L.iface_n; i++) {
+    const int y = L.y_net0 + i * STATUS_IFACE_STEP;
+    drawText1(tft, 200, y, "RX:", COL_RX);
+    drawText1(tft, 258, y, "TX:", COL_TX);
+  }
+
+  drawText1(tft, 6, L.y_services, "SERVICES", g_label);
+}
+
+static void paintHeader(TFT_eSPI *tft, const StatusSnap &s, bool force) {
+  char host[25], date[21], tim[13];
+  copyCapped(host, sizeof(host), s.hostname, sizeof(s.hostname));
+  if (!host[0])
+    snprintf(host, sizeof(host), "host");
+  copyCapped(date, sizeof(date), s.date, sizeof(s.date));
+  if (!date[0])
+    snprintf(date, sizeof(date), "--/--/----");
+  copyCapped(tim, sizeof(tim), s.time, sizeof(s.time));
+  if (!tim[0])
+    snprintf(tim, sizeof(tim), "--:--:--");
+
+  // Per-field slots — avoid wiping the full 320×16 header on clock ticks.
+  paintSlot1(tft, 4, 4, 120, g_s_host, sizeof(g_s_host), host,
+             s.style.host_c ? s.style.host_c : COL_WHITE, force);
+
+  constexpr int time_w = 8 * FONT1_W;
+  constexpr int time_x = 316 - time_w;
+  if (force || strncmp(g_s_time, tim, sizeof(g_s_time)) != 0) {
+    clearRect(tft, time_x, 4, time_w, FONT1_H);
+    tft->setTextDatum(TR_DATUM);
+    tft->setTextFont(1);
+    tft->setTextColor(s.style.time_c ? s.style.time_c : COL_WHITE, g_bg);
+    tft->drawString(tim, 316, 4, 1);
+    tft->setTextDatum(TL_DATUM);
+    strncpy(g_s_time, tim, sizeof(g_s_time) - 1);
+  }
+
+  constexpr int date_w = 10 * FONT1_W;
+  constexpr int date_x = time_x - 6 - date_w;
+  paintSlot1(tft, date_x, 4, date_w, g_s_date, sizeof(g_s_date), date,
+             s.style.date_c ? s.style.date_c : g_label, force);
+}
+
+static void paintHero(TFT_eSPI *tft, const StatusSnap &s, const StatusLayout &L,
+                      bool force) {
+  char line[24], a[12], b[12];
+  bool touched = false;
+
+  if (s.flags & ST_F_HAS_CPU)
     snprintf(line, sizeof(line), "%u%%", (unsigned)s.cpu_pct);
-    drawBig(tft, 6, L.y_hero_pct, line, heroMeterColor(s, 0, s.cpu_pct));
-  } else {
-    drawBig(tft, 6, L.y_hero_pct, "--", COL_MUTED);
-  }
-  if (s.flags & ST_F_HAS_TEMP) {
-    snprintf(line, sizeof(line), "TEMP: %.0fC", s.cpu_temp_c10 / 10.0f);
-    drawText1(tft, 6, L.y_hero_sub, line, g_label);
-  } else {
-    drawText1(tft, 6, L.y_hero_sub, "TEMP: --", g_label);
-  }
+  else
+    snprintf(line, sizeof(line), "--");
+  touched |= paintSlotBig(tft, 6, L.y_hero_pct, HERO_COL_W - 8, g_s_cpu,
+                          sizeof(g_s_cpu), line,
+                          (s.flags & ST_F_HAS_CPU)
+                              ? heroMeterColor(s, 0, s.cpu_pct)
+                              : COL_MUTED,
+                          &g_c_cpu, force);
+
+  if (s.flags & ST_F_HAS_TEMP)
+    snprintf(line, sizeof(line), "%.0fC", s.cpu_temp_c10 / 10.0f);
+  else
+    snprintf(line, sizeof(line), "--");
+  touched |= paintSlot1(tft, 6 + 5 * FONT1_W, L.y_hero_sub, 48, g_s_temp,
+                        sizeof(g_s_temp), line, COL_WHITE, force);
+
+  if (s.flags & ST_F_HAS_MEM)
+    snprintf(line, sizeof(line), "%u%%", (unsigned)s.mem_pct);
+  else
+    snprintf(line, sizeof(line), "--");
+  touched |= paintSlotBig(tft, 112, L.y_hero_pct, HERO_COL_W - 8, g_s_mem,
+                          sizeof(g_s_mem), line,
+                          (s.flags & ST_F_HAS_MEM)
+                              ? heroMeterColor(s, 1, s.mem_pct)
+                              : COL_MUTED,
+                          &g_c_mem, force);
 
   if (s.flags & ST_F_HAS_MEM) {
-    snprintf(line, sizeof(line), "%u%%", (unsigned)s.mem_pct);
-    drawBig(tft, 112, L.y_hero_pct, line, heroMeterColor(s, 1, s.mem_pct));
     fmtGb(a, sizeof(a), s.mem_used_mb);
     fmtGb(b, sizeof(b), s.mem_total_mb);
     snprintf(line, sizeof(line), "%s/%s GB", a, b);
-    drawText1(tft, 112, L.y_hero_sub, line, g_label);
   } else {
-    drawBig(tft, 112, L.y_hero_pct, "--", COL_MUTED);
-    drawText1(tft, 112, L.y_hero_sub, "--/-- GB", g_label);
+    snprintf(line, sizeof(line), "--/-- GB");
   }
+  touched |= paintSlot1(tft, 112, L.y_hero_sub, HERO_COL_W - 8, g_s_mem_sub,
+                        sizeof(g_s_mem_sub), line, COL_WHITE, force);
+
+  if (s.flags & ST_F_HAS_DISK)
+    snprintf(line, sizeof(line), "%u%%", (unsigned)s.disk_pct);
+  else
+    snprintf(line, sizeof(line), "--");
+  touched |= paintSlotBig(tft, 218, L.y_hero_pct, HERO_COL_W - 8, g_s_disk,
+                          sizeof(g_s_disk), line,
+                          (s.flags & ST_F_HAS_DISK)
+                              ? heroMeterColor(s, 2, s.disk_pct)
+                              : COL_MUTED,
+                          &g_c_disk, force);
 
   if (s.flags & ST_F_HAS_DISK) {
-    snprintf(line, sizeof(line), "%u%%", (unsigned)s.disk_pct);
-    drawBig(tft, 218, L.y_hero_pct, line, heroMeterColor(s, 2, s.disk_pct));
     fmtGb(a, sizeof(a), s.disk_used_mb);
     fmtGb(b, sizeof(b), s.disk_total_mb);
     snprintf(line, sizeof(line), "%s/%s GB", a, b);
-    drawText1(tft, 218, L.y_hero_sub, line, g_label);
   } else {
-    drawBig(tft, 218, L.y_hero_pct, "--", COL_MUTED);
-    drawText1(tft, 218, L.y_hero_sub, "--/-- GB", g_label);
+    snprintf(line, sizeof(line), "--/-- GB");
   }
-}
+  touched |= paintSlot1(tft, 218, L.y_hero_sub, HERO_COL_W - 8, g_s_disk_sub,
+                        sizeof(g_s_disk_sub), line, COL_WHITE, force);
 
-static void paintOneSecondary(TFT_eSPI *tft, const StatusSnap &s, uint8_t id,
-                              uint16_t color, int x_label, int x_val, int y) {
-  if (id == SEC_NONE)
-    return;
-  const char *lab = secLabel(id);
-  drawText1(tft, x_label, y, lab, g_label);
-  char val[40];
-  fmtSecValue(val, sizeof(val), s, id);
-  drawText1(tft, x_val, y, val, color ? color : COL_WHITE);
+  // Font4 clears can clip the CPU/MEM/DISK labels above.
+  if (touched || force)
+    paintHeroLabels(tft, L);
 }
 
 static void paintSecondary(TFT_eSPI *tft, const StatusSnap &s,
-                           const StatusLayout &L) {
+                           const StatusLayout &L, bool force) {
   if (!L.secondary)
     return;
-  clearRect(tft, 0, L.y_secondary - 1, 320, STATUS_SECONDARY_H);
-  paintOneSecondary(tft, s, s.style.sec_left, s.style.sec_left_c, 6, 54,
-                    L.y_secondary);
-  paintOneSecondary(tft, s, s.style.sec_right, s.style.sec_right_c, 168, 210,
-                    L.y_secondary);
+  char val[40];
+  if (s.style.sec_left != SEC_NONE) {
+    fmtSecValue(val, sizeof(val), s, s.style.sec_left);
+    paintSlot1(tft, 54, L.y_secondary, 110, g_s_sec_l, sizeof(g_s_sec_l), val,
+               s.style.sec_left_c ? s.style.sec_left_c : COL_WHITE, force);
+  }
+  if (s.style.sec_right != SEC_NONE) {
+    fmtSecValue(val, sizeof(val), s, s.style.sec_right);
+    paintSlot1(tft, 210, L.y_secondary, 110, g_s_sec_r, sizeof(g_s_sec_r), val,
+               s.style.sec_right_c ? s.style.sec_right_c : COL_WHITE, force);
+  }
 }
 
 static void paintNet(TFT_eSPI *tft, const StatusSnap &s, const StatusLayout &L,
                      bool force) {
   const int n = L.iface_n;
-  const int prev_n = g_prev_iface_n;
-  if (force || n != prev_n) {
-    const int wipe = (n > prev_n ? n : prev_n);
-    if (wipe > 0 || g_prev_layout.y_net0 != L.y_net0)
-      clearRect(tft, 0, (L.y_net0 < g_prev_layout.y_net0 ? L.y_net0
-                                                         : g_prev_layout.y_net0) -
-                            1,
-                320, (wipe > 0 ? wipe : 1) * STATUS_IFACE_STEP + 4);
-  }
-  if (n == 0) {
-    g_prev_iface_n = 0;
-    return;
-  }
-
-  char rx[12], tx[12], name[IFACE_NAME_SHOW + 1], ip[IFACE_IP_SHOW + 1];
   const int x_name = 6;
-  const int x_ip = 6 + (int)IFACE_NAME_SHOW * 6 + 8;
-  const int x_rx = 200;
-  const int x_rx_v = 218;
-  const int x_tx = 258;
-  const int x_tx_v = 276;
-  const uint16_t name_off = (g_roll_phase == ROLL_NAME) ? g_roll_off : 0;
-  const uint16_t ip_off = (g_roll_phase == ROLL_IP) ? g_roll_off : 0;
+  const int x_ip = 6 + (int)IFACE_NAME_SHOW * FONT1_W + 8;
+  const int name_w = (int)IFACE_NAME_SHOW * FONT1_W;
+  const int ip_w = (int)IFACE_IP_SHOW * FONT1_W;
+  const int rate_w = 40;
+  const uint16_t name_off = g_roll_off;
+  const uint16_t ip_off = g_roll_off;
+
+  if (force || n != g_drawn_iface_n) {
+    const int wipe = (n > g_drawn_iface_n ? n : g_drawn_iface_n);
+    const int y0 = L.y_net0;
+    if (wipe > 0)
+      clearRect(tft, 0, y0 - 1, 320, wipe * STATUS_IFACE_STEP + 2);
+    for (int i = 0; i < n; i++) {
+      const int y = L.y_net0 + i * STATUS_IFACE_STEP;
+      drawText1(tft, 200, y, "RX:", COL_RX);
+      drawText1(tft, 258, y, "TX:", COL_TX);
+    }
+    for (int i = 0; i < STATUS_IFACE_COUNT; i++) {
+      g_s_if_name[i][0] = 0;
+      g_s_if_ip[i][0] = 0;
+      g_s_if_rx[i][0] = 0;
+      g_s_if_tx[i][0] = 0;
+    }
+    g_drawn_iface_n = n;
+  }
 
   for (int i = 0; i < n; i++) {
     const StatusIface &cur = s.ifaces[i];
     const int y = L.y_net0 + i * STATUS_IFACE_STEP;
-    clearRect(tft, 0, y - 1, 320, STATUS_IFACE_STEP);
     if (!cur.name[0])
       continue;
+
+    char name[IFACE_NAME_SHOW + 1];
+    char ip[IFACE_IP_SHOW + 1];
+    char rx[12], tx[12];
+
     rollWindow(name, IFACE_NAME_SHOW, cur.name, IFACE_NAME_WIRE, name_off);
     if (cur.ip[0])
       rollWindow(ip, IFACE_IP_SHOW, cur.ip, IFACE_IP_WIRE, ip_off);
@@ -489,33 +570,31 @@ static void paintNet(TFT_eSPI *tft, const StatusSnap &s, const StatusLayout &L,
     }
     fmtRate(rx, sizeof(rx), cur.rx_bps);
     fmtRate(tx, sizeof(tx), cur.tx_bps);
-    drawText1(tft, x_name, y, name, g_label);
-    drawText1(tft, x_ip, y, ip, COL_WHITE);
-    drawText1(tft, x_rx, y, "RX:", COL_RX);
-    drawText1(tft, x_rx_v, y, rx, COL_WHITE);
-    drawText1(tft, x_tx, y, "TX:", COL_TX);
-    drawText1(tft, x_tx_v, y, tx, COL_WHITE);
+
+    paintSlot1(tft, x_name, y, name_w, g_s_if_name[i], sizeof(g_s_if_name[i]),
+               name, g_label, force);
+    paintSlot1(tft, x_ip, y, ip_w, g_s_if_ip[i], sizeof(g_s_if_ip[i]), ip,
+               COL_WHITE, force);
+    paintSlot1(tft, 218, y, rate_w, g_s_if_rx[i], sizeof(g_s_if_rx[i]), rx,
+               COL_WHITE, force);
+    paintSlot1(tft, 276, y, rate_w, g_s_if_tx[i], sizeof(g_s_if_tx[i]), tx,
+               COL_WHITE, force);
   }
-  g_prev_iface_n = n;
 }
 
 static void paintServices(TFT_eSPI *tft, const StatusSnap &s,
-                          const StatusLayout &L) {
+                          const StatusLayout &L, bool force) {
+  if (!force && g_have_prev && servicesEqual(s, g_prev))
+    return;
+
   const int y0 = L.y_services;
   const int n = statusSvcCount(s);
-  const int old_y = g_prev_svc_y >= 0 ? g_prev_svc_y : y0;
-  const int clear_y = old_y < y0 ? old_y : y0;
-  clearRect(tft, 0, clear_y - 1, 320, 240 - clear_y);
-
-  if (n == 0) {
-    g_prev_svc_y = y0;
-    g_prev_svc_n = 0;
-    return;
-  }
-
+  const int body_y = y0 + 12;
+  clearRect(tft, 0, body_y - 1, 320, 240 - body_y);
   drawText1(tft, 6, y0, "SERVICES", g_label);
+
   int x = 6;
-  int y = y0 + 12;
+  int y = body_y;
   const int max_x = 314;
   const int row_h = 11;
   for (int i = 0; i < n; i++) {
@@ -524,7 +603,7 @@ static void paintServices(TFT_eSPI *tft, const StatusSnap &s,
     name[STATUS_SVC_NAME] = 0;
     if (!name[0])
       continue;
-    const int w = (int)strlen(name) * 6;
+    const int w = (int)strlen(name) * FONT1_W;
     if (x > 6 && x + w > max_x) {
       x = 6;
       y += row_h;
@@ -534,8 +613,6 @@ static void paintServices(TFT_eSPI *tft, const StatusSnap &s,
     drawText1(tft, x, y, name, svcColor(s.style, s.services[i].status));
     x += w + 8;
   }
-  g_prev_svc_y = y0;
-  g_prev_svc_n = n;
 }
 
 void paintStatusGui(TFT_eSPI *tft, const StatusSnap &s, bool force_full) {
@@ -543,28 +620,52 @@ void paintStatusGui(TFT_eSPI *tft, const StatusSnap &s, bool force_full) {
     return;
 
   applyTheme(s.style);
-
-  const uint32_t now = millis();
-  const bool roll_tick = advanceRoll(now, s);
   const StatusLayout L = statusLayoutOf(s);
-  const bool force = force_full || !g_chrome;
-  const uint8_t dirty = computeDirty(s, L, force, roll_tick);
+  const bool force =
+      force_full || !g_chrome || !g_have_prev || styleChanged(s, g_prev) ||
+      layoutChanged(L, g_prev_layout);
 
   if (force) {
     tft->fillScreen(g_bg);
+    g_have_prev = false;
+    g_drawn_iface_n = 0;
+    resetRoll();
+    memset(g_s_host, 0, sizeof(g_s_host));
+    memset(g_s_date, 0, sizeof(g_s_date));
+    memset(g_s_time, 0, sizeof(g_s_time));
+    memset(g_s_cpu, 0, sizeof(g_s_cpu));
+    memset(g_s_temp, 0, sizeof(g_s_temp));
+    memset(g_s_mem, 0, sizeof(g_s_mem));
+    memset(g_s_mem_sub, 0, sizeof(g_s_mem_sub));
+    memset(g_s_disk, 0, sizeof(g_s_disk));
+    memset(g_s_disk_sub, 0, sizeof(g_s_disk_sub));
+    memset(g_s_sec_l, 0, sizeof(g_s_sec_l));
+    memset(g_s_sec_r, 0, sizeof(g_s_sec_r));
+    memset(g_s_if_name, 0, sizeof(g_s_if_name));
+    memset(g_s_if_ip, 0, sizeof(g_s_if_ip));
+    memset(g_s_if_rx, 0, sizeof(g_s_if_rx));
+    memset(g_s_if_tx, 0, sizeof(g_s_if_tx));
+    g_c_cpu = g_c_mem = g_c_disk = 0;
     g_chrome = true;
+    paintChrome(tft, s, L);
+  } else if (g_have_prev) {
+    for (int i = 0; i < STATUS_IFACE_COUNT; i++) {
+      if (memcmp(s.ifaces[i].name, g_prev.ifaces[i].name, IFACE_NAME_WIRE) !=
+              0 ||
+          memcmp(s.ifaces[i].ip, g_prev.ifaces[i].ip, IFACE_IP_WIRE) != 0) {
+        g_roll_off = 0;
+        g_roll_dir = 1;
+        g_roll_painted_off = 0xFFFF;
+        break;
+      }
+    }
   }
 
-  if (dirty & DIRTY_HEADER)
-    paintHeader(tft, s, L);
-  if (dirty & DIRTY_HERO)
-    paintHero(tft, s, L);
-  if (dirty & DIRTY_SECONDARY)
-    paintSecondary(tft, s, L);
-  if (dirty & DIRTY_NET)
-    paintNet(tft, s, L, force || (dirty == DIRTY_ALL));
-  if (dirty & DIRTY_SERVICES)
-    paintServices(tft, s, L);
+  paintHeader(tft, s, force);
+  paintHero(tft, s, L, force);
+  paintSecondary(tft, s, L, force);
+  paintNet(tft, s, L, force);
+  paintServices(tft, s, L, force);
 
   g_prev = s;
   g_prev_layout = L;

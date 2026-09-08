@@ -9,7 +9,7 @@ static constexpr char STATUS_MAGIC0 = 'T';
 static constexpr char STATUS_MAGIC1 = 'B';
 static constexpr char STATUS_MAGIC2 = 'S';
 static constexpr char STATUS_MAGIC3 = 'T';
-static constexpr uint8_t STATUS_VER = 10;
+static constexpr uint8_t STATUS_VER = 11;
 
 static constexpr uint8_t ST_F_HAS_TEMP = 0x02;
 static constexpr uint8_t ST_F_HAS_CPU = 0x20;
@@ -31,16 +31,16 @@ static constexpr uint8_t SEC_UPTIME = 1;
 static constexpr uint8_t SEC_SWAP = 2;
 static constexpr uint8_t SEC_LOAD = 3;
 
-static constexpr uint8_t METER_OFF = 0; // fixed hero.colors
-static constexpr uint8_t METER_ON = 1;  // color by thresholds
+static constexpr uint8_t METER_OFF = 0;
+static constexpr uint8_t METER_ON = 1;
 
 static constexpr size_t IFACE_NAME_WIRE = 16;
 static constexpr size_t IFACE_NAME_SHOW = 10;
 static constexpr size_t IFACE_IP_WIRE = 40;
-static constexpr size_t IFACE_IP_SHOW = 18;
-static constexpr int STATUS_IFACE_COUNT = 16; // wire max; config is uncapped up to this
+static constexpr size_t IFACE_IP_SHOW = 20;
+static constexpr int STATUS_IFACE_COUNT = 16;
 static constexpr int STATUS_SVC_COUNT = 80;
-static constexpr size_t STATUS_SVC_NAME = 12;
+static constexpr size_t STATUS_SVC_NAME = 40;
 
 static constexpr int STATUS_HEADER_H = 16;
 static constexpr int STATUS_HERO_H = 52;
@@ -59,11 +59,11 @@ struct __attribute__((packed)) StatusStyle {
   uint16_t hero_cpu_c;
   uint16_t hero_mem_c;
   uint16_t hero_disk_c;
-  uint8_t meter_mode; // METER_ON / METER_OFF
+  uint8_t meter_mode;
   uint8_t warn_at;
   uint8_t crit_at;
-  uint8_t sec_left;  // SEC_*
-  uint8_t sec_right; // SEC_*
+  uint8_t sec_left;
+  uint8_t sec_right;
   uint16_t sec_left_c;
   uint16_t sec_right_c;
   uint16_t svc_active;
@@ -113,6 +113,7 @@ struct __attribute__((packed)) StatusSnap {
 };
 
 static_assert(sizeof(StatusStyle) == 45, "StatusStyle size");
+static_assert(sizeof(StatusSnap) == 4451, "StatusSnap wire size");
 static_assert(sizeof(StatusSnap) <= 4770, "StatusSnap must fit TERM_PAYLOAD");
 
 inline int statusIfaceCount(const StatusSnap &s) {
@@ -141,7 +142,7 @@ inline bool statusSecondaryVisible(const StatusSnap &s) {
   return s.style.sec_left != SEC_NONE || s.style.sec_right != SEC_NONE;
 }
 
-/** Dynamic section Y anchors from style + iface count. */
+/** Y anchors derived from style + iface count. */
 struct StatusLayout {
   int header_h;
   int y_hero_label;
@@ -157,10 +158,11 @@ struct StatusLayout {
 inline StatusLayout statusLayoutOf(const StatusSnap &s) {
   StatusLayout L{};
   L.header_h = STATUS_HEADER_H;
-  L.y_hero_label = STATUS_HEADER_H + 2; // Font1 below strip (not cropped)
+  // Font4 (~28px) must clear fully before the sub-line or glyphs ghost into it.
+  L.y_hero_label = STATUS_HEADER_H + 2;
   L.y_hero_pct = L.y_hero_label + 10;
-  L.y_hero_sub = L.y_hero_pct + 26;
-  int y = L.y_hero_sub + 14;
+  L.y_hero_sub = L.y_hero_pct + 28;
+  int y = L.y_hero_sub + 12;
   L.secondary = statusSecondaryVisible(s);
   if (L.secondary) {
     L.y_secondary = y;
@@ -200,8 +202,8 @@ inline void statusSnapClear(StatusSnap &s) {
   s.style.meter_mode = METER_ON;
   s.style.warn_at = 60;
   s.style.crit_at = 90;
-  s.style.label_c = 0x6BF1; // #6B7C8F
-  s.style.bg_c = 0;         // black
+  s.style.label_c = 0x8C51;
+  s.style.bg_c = 0;
 }
 
 void paintStatusGui(TFT_eSPI *tft, const StatusSnap &s, bool force_full);

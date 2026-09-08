@@ -1,4 +1,4 @@
-//! Wire protocol: CRC frames + StatusSnap v10.
+//! Wire protocol: CRC frames + StatusSnap v11.
 
 pub const COLS: usize = 53;
 pub const ROWS: usize = 30;
@@ -16,11 +16,12 @@ pub const FLAG_CURSOR_ON: u8 = 0x02;
 pub const FLAG_STATUS: u8 = 0x20;
 pub const FLAG_BYE: u8 = 0x80;
 
-pub const STATUS_VER: u8 = 10;
-pub const STATUS_SNAP_LEN: usize = 2211;
+pub const STATUS_VER: u8 = 11;
+pub const STATUS_SNAP_LEN: usize = 4451;
 pub const STYLE_LEN: usize = 45;
 pub const IFACE_COUNT: usize = 16;
 pub const SVC_COUNT: usize = 80;
+pub const SVC_NAME_LEN: usize = 40;
 
 pub const ST_F_HAS_TEMP: u8 = 0x02;
 pub const ST_F_HAS_CPU: u8 = 0x20;
@@ -109,14 +110,14 @@ pub struct StatusStyle {
 impl Default for StatusStyle {
     fn default() -> Self {
         Self {
-            label_c: rgb565(0x6B, 0x7C, 0x8F),
+            label_c: rgb565(0x88, 0x88, 0x88),
             bg_c: 0,
             host_c: 0xFFFF,
-            date_c: rgb565(0x6B, 0x7C, 0x8F),
+            date_c: rgb565(0x88, 0x88, 0x88),
             time_c: 0xFFFF,
-            level_ok: rgb565(0x81, 0xC7, 0x84),
-            level_warn: rgb565(0xE0, 0xC0, 0x6A),
-            level_crit: rgb565(0xE5, 0x73, 0x73),
+            level_ok: rgb565(0x33, 0xAA, 0x33),
+            level_warn: rgb565(0xCC, 0xCC, 0x33),
+            level_crit: rgb565(0xCC, 0x33, 0x33),
             hero_cpu_c: 0xFFFF,
             hero_mem_c: 0xFFFF,
             hero_disk_c: 0xFFFF,
@@ -127,13 +128,13 @@ impl Default for StatusStyle {
             sec_right: SEC_NONE,
             sec_left_c: 0xFFFF,
             sec_right_c: 0xFFFF,
-            svc_active: rgb565(0x81, 0xC7, 0x84),
-            svc_failed: rgb565(0xE5, 0x73, 0x73),
-            svc_deactivating: rgb565(0xE0, 0xC0, 0x6A),
-            svc_activating: rgb565(0x4D, 0xD0, 0xE1),
-            svc_reloading: rgb565(0x4D, 0xD0, 0xE1),
-            svc_inactive: rgb565(0xA8, 0xB4, 0xC0),
-            svc_maintenance: rgb565(0x6B, 0x7C, 0x8F),
+            svc_active: rgb565(0x33, 0xAA, 0x33),
+            svc_failed: rgb565(0xCC, 0x33, 0x33),
+            svc_deactivating: rgb565(0xCC, 0xAA, 0x33),
+            svc_activating: rgb565(0x33, 0x99, 0xCC),
+            svc_reloading: rgb565(0x33, 0x99, 0xCC),
+            svc_inactive: rgb565(0x88, 0x88, 0x88),
+            svc_maintenance: rgb565(0x88, 0x88, 0x88),
         }
     }
 }
@@ -314,7 +315,7 @@ impl StatusSnap {
             let svc = self.services.get(i);
             let name = svc.map(|x| x.name.as_str()).unwrap_or("");
             let st = svc.map(|x| x.status).unwrap_or(0);
-            put(&mut out, &mut o, &pad_str(name, 12));
+            put(&mut out, &mut o, &pad_str(name, SVC_NAME_LEN));
             put(
                 &mut out,
                 &mut o,
@@ -378,8 +379,8 @@ mod tests {
     #[test]
     fn sizes() {
         assert_eq!(PAYLOAD_LEN, 4770);
-        assert_eq!(STATUS_SNAP_LEN, 2211);
+        assert_eq!(STATUS_SNAP_LEN, 4451);
         assert_eq!(StatusStyle::default().pack().len(), 45);
-        assert_eq!(StatusSnap::default().pack().len(), 2211);
+        assert_eq!(StatusSnap::default().pack().len(), 4451);
     }
 }
