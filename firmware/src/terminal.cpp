@@ -310,6 +310,7 @@ void Terminal::reset() {
   prev_cur_x_ = prev_cur_y_ = -1;
   prev_cur_flags_ = 0;
   linked_ = false;
+  status_seen_ = false;
   bye_ = false;
   last_good_ms_ = 0;
   status_ui_ = false;
@@ -553,6 +554,7 @@ void Terminal::applyPayload() {
       memcpy(&next, payload_, sizeof(StatusSnap));
     if (statusSnapValid(next)) {
       linked_ = true;
+      status_seen_ = true;
       cur_flags_ = 0;
       if (status_ui_ && memcmp(&status_, &next, sizeof(StatusSnap)) == 0)
         return; // identical keepalive snap

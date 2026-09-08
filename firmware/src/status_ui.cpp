@@ -21,6 +21,9 @@ static StatusLayout g_prev_layout{};
 static bool g_have_prev = false;
 static bool g_chrome = false;
 
+static bool g_hole_on = false;
+static int g_hole_x = 0, g_hole_y = 0, g_hole_w = 0, g_hole_h = 0;
+
 static char g_s_host[25]{};
 static char g_s_date[21]{};
 static char g_s_time[13]{};
@@ -40,6 +43,7 @@ static char g_s_if_rx[STATUS_IFACE_COUNT][12]{};
 static char g_s_if_tx[STATUS_IFACE_COUNT][12]{};
 static char g_alert_shown[STATUS_ALERT_CHARS + 1]{};
 static char g_alert_latch[STATUS_ALERT_CHARS + 1]{};
+static char g_alert_ack[STATUS_ALERT_CHARS + 1]{};
 static uint32_t g_alert_until_ms = 0;
 static bool g_alert_on = false;
 static int g_drawn_iface_n = 0;
@@ -91,6 +95,7 @@ void statusGuiReset() {
   g_drawn_iface_n = 0;
   g_bg = COL_BG_DEFAULT;
   g_label = COL_LABEL_DEFAULT;
+  g_hole_on = false;
   resetRoll();
   memset(&g_prev, 0, sizeof(g_prev));
   memset(&g_prev_layout, 0, sizeof(g_prev_layout));
@@ -112,9 +117,38 @@ void statusGuiReset() {
   g_c_cpu = g_c_mem = g_c_disk = 0;
   g_alert_shown[0] = 0;
   g_alert_latch[0] = 0;
+  g_alert_ack[0] = 0;
   g_alert_until_ms = 0;
   g_alert_on = false;
   resetAlertRoll();
+}
+
+bool statusGuiAlertActive() { return g_alert_on; }
+
+void statusGuiDismissAlert() {
+  if (!g_alert_on)
+    return;
+  strncpy(g_alert_ack, g_alert_shown, STATUS_ALERT_CHARS);
+  g_alert_ack[STATUS_ALERT_CHARS] = 0;
+}
+
+void statusGuiSetOverlay(int x, int y, int w, int h) {
+  if (w <= 0 || h <= 0) {
+    g_hole_on = false;
+    return;
+  }
+  g_hole_x = x;
+  g_hole_y = y;
+  g_hole_w = w;
+  g_hole_h = h;
+  g_hole_on = true;
+}
+
+static bool hitsHole(int x, int y, int w, int h) {
+  if (!g_hole_on || w <= 0 || h <= 0)
+    return false;
+  return !(x + w <= g_hole_x || x >= g_hole_x + g_hole_w || y + h <= g_hole_y ||
+           y >= g_hole_y + g_hole_h);
 }
 
 static void applyTheme(const StatusStyle &st) {
@@ -123,12 +157,31 @@ static void applyTheme(const StatusStyle &st) {
 }
 
 static void clearRect(TFT_eSPI *tft, int x, int y, int w, int h) {
-  if (w <= 0 || h <= 0)
+  if (w <= 0 || h <= 0 || hitsHole(x, y, w, h))
     return;
   tft->fillRect(x, y, w, h, g_bg);
 }
 
+/** Full wipe that leaves the OSD overlay hole intact. */
+static void clearScreenExceptHole(TFT_eSPI *tft) {
+  if (!g_hole_on) {
+    tft->fillScreen(g_bg);
+    return;
+  }
+  const int hx = g_hole_x, hy = g_hole_y, hw = g_hole_w, hh = g_hole_h;
+  if (hy > 0)
+    tft->fillRect(0, 0, 320, hy, g_bg);
+  if (hy + hh < 240)
+    tft->fillRect(0, hy + hh, 320, 240 - (hy + hh), g_bg);
+  if (hx > 0)
+    tft->fillRect(0, hy, hx, hh, g_bg);
+  if (hx + hw < 320)
+    tft->fillRect(hx + hw, hy, 320 - (hx + hw), hh, g_bg);
+}
+
 static void drawText1(TFT_eSPI *tft, int x, int y, const char *t, uint16_t col) {
+  if (!t || hitsHole(x, y, (int)strlen(t) * FONT1_W, FONT1_H))
+    return;
   tft->setTextDatum(TL_DATUM);
   tft->setTextFont(1);
   tft->setTextColor(col, g_bg);
@@ -136,8 +189,13 @@ static void drawText1(TFT_eSPI *tft, int x, int y, const char *t, uint16_t col) 
 }
 
 static void drawBig(TFT_eSPI *tft, int x, int y, const char *t, uint16_t col) {
-  tft->setTextDatum(TL_DATUM);
+  if (!t)
+    return;
   tft->setTextFont(4);
+  const int tw = tft->textWidth(t, 4);
+  if (hitsHole(x, y, tw, FONT4_H))
+    return;
+  tft->setTextDatum(TL_DATUM);
   // Transparent: Font4's opaque pad would punch the label row above.
   tft->setTextColor(col);
   tft->drawString(t, x, y, 4);
@@ -521,15 +579,17 @@ static void paintHeader(TFT_eSPI *tft, const StatusSnap &s, bool force) {
   constexpr int time_w = 8 * FONT1_W;
   constexpr int time_x = 316 - time_w;
   if (force || strncmp(g_s_time, tim, sizeof(g_s_time)) != 0) {
-    const int old_w = g_s_time[0] ? (int)strlen(g_s_time) * FONT1_W : time_w;
-    tft->setTextDatum(TR_DATUM);
-    tft->setTextFont(1);
-    tft->setTextColor(s.style.time_c ? s.style.time_c : COL_WHITE, g_bg);
-    tft->drawString(tim, 316, 4, 1);
-    tft->setTextDatum(TL_DATUM);
-    const int new_w = (int)strlen(tim) * FONT1_W;
-    if (old_w > new_w)
-      clearRect(tft, 316 - old_w, 4, old_w - new_w, FONT1_H);
+    if (!hitsHole(time_x, 4, time_w, FONT1_H)) {
+      const int old_w = g_s_time[0] ? (int)strlen(g_s_time) * FONT1_W : time_w;
+      tft->setTextDatum(TR_DATUM);
+      tft->setTextFont(1);
+      tft->setTextColor(s.style.time_c ? s.style.time_c : COL_WHITE, g_bg);
+      tft->drawString(tim, 316, 4, 1);
+      tft->setTextDatum(TL_DATUM);
+      const int new_w = (int)strlen(tim) * FONT1_W;
+      if (old_w > new_w)
+        clearRect(tft, 316 - old_w, 4, old_w - new_w, FONT1_H);
+    }
     strncpy(g_s_time, tim, sizeof(g_s_time) - 1);
   }
 
@@ -743,6 +803,7 @@ static void resolveAlertText(const StatusSnap &s, uint32_t now_ms, char *out,
   statusBuildAlert(s, live, sizeof(live));
   if (!live[0]) {
     g_alert_latch[0] = 0;
+    g_alert_ack[0] = 0;
     g_alert_until_ms = 0;
     out[0] = 0;
     *active = false;
@@ -756,6 +817,13 @@ static void resolveAlertText(const StatusSnap &s, uint32_t now_ms, char *out,
                            ? now_ms + (uint32_t)s.style.alert_hold_sec * 1000u
                            : 0;
     resetAlertRoll();
+  }
+
+  // Tap-dismissed; stays hidden until alert text changes.
+  if (g_alert_ack[0] && strncmp(g_alert_ack, live, STATUS_ALERT_CHARS) == 0) {
+    out[0] = 0;
+    *active = false;
+    return;
   }
 
   if (s.style.alert_hold_sec > 0 && g_alert_until_ms != 0 &&
@@ -824,7 +892,7 @@ void paintStatusGui(TFT_eSPI *tft, const StatusSnap &s, bool force_full) {
   const bool force_services = force || alert_band_changed;
 
   if (force) {
-    tft->fillScreen(g_bg);
+    clearScreenExceptHole(tft);
     g_have_prev = false;
     g_drawn_iface_n = 0;
     resetRoll();

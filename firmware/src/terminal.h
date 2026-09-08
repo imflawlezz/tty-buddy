@@ -23,6 +23,15 @@ public:
   bool takeBye();
   uint32_t lastGoodFrameMs() const { return last_good_ms_; }
   bool statusUiActive() const { return status_ui_; }
+  const StatusSnap &statusSnap() const { return status_; }
+  /// Distinct from statusUiActive(): survives mode switches until a new snap.
+  bool hasStatusSnap() const { return status_seen_; }
+  /// Mark status UI dirty (optionally force a full paint).
+  void requestStatusRepaint(bool full = false) {
+    status_dirty_ = true;
+    if (full)
+      status_full_paint_ = true;
+  }
   void paintStatusUi();
 
   int cols() const { return TERM_COLS; }
@@ -61,6 +70,7 @@ private:
   uint8_t prev_cur_flags_ = 0;
 
   bool linked_ = false;
+  bool status_seen_ = false;
   bool bye_ = false;
   uint32_t last_good_ms_ = 0;
 
