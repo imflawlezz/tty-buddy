@@ -13,10 +13,15 @@ use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use crate::discover::resolve_device;
 use crate::keyboard::Keyboard;
 use crate::metrics::MetricsCollector;
-use crate::protocol::{FLAG_BYE, FLAG_CURSOR_ON, FLAG_CURSOR_VISIBLE, FLAG_STATUS, PAYLOAD_LEN};
-use crate::serial_io::BuddySerial;
+use crate::protocol::{
+    FLAG_ACTIVITY, FLAG_BYE, FLAG_CURSOR_ON, FLAG_CURSOR_VISIBLE, FLAG_STATUS, FLAG_STYLE,
+    PAYLOAD_LEN,
+};
+use crate::serial_io::{BuddySerial, DeviceEvent};
 use crate::settings::DaemonSettings;
-use crate::status_config::{load_status_config, maybe_reload};
+use crate::status_config::{
+    apply_osd_levels, load_status_config, maybe_reload, write_osd_levels, StatusUiConfig,
+};
 use crate::terminal::PtySession;
 
 pub fn run_forever(settings: &DaemonSettings, status_config: &Path, fps: f32) -> Result<()> {
@@ -74,6 +79,43 @@ fn enter_status(keyboard: &mut Keyboard) {
     keyboard.ungrab();
 }
 
+fn push_style(serial: &mut BuddySerial, cfg: &StatusUiConfig, metrics: &mut MetricsCollector) {
+    match metrics.sample(cfg) {
+        Ok(snap) => {
+            if let Err(e) = serial.send_frame(0, 0, FLAG_STYLE, &snap.to_payload()) {
+                eprintln!("style push: {e:#}");
+            }
+        }
+        Err(e) => eprintln!("style push sample: {e:#}"),
+    }
+}
+
+fn apply_device_osd(path: &Path, cfg: &mut StatusUiConfig, bright: Option<u8>, sleep: Option<u8>) {
+    let b = bright.unwrap_or(cfg.style.osd_default_bright_pct);
+    let s = sleep.unwrap_or(cfg.style.osd_sleep_timeout_s.min(6) as u8);
+    apply_osd_levels(cfg, b, s);
+    if let Err(e) = write_osd_levels(path, b, s) {
+        eprintln!("osd config write: {e:#}");
+        return;
+    }
+    if let Ok(mtime) = std::fs::metadata(path).and_then(|m| m.modified()) {
+        cfg.mtime = Some(mtime);
+    }
+    eprintln!(
+        "osd → config: brightness={} sleep={}",
+        if b == 0 {
+            "auto".to_string()
+        } else {
+            b.to_string()
+        },
+        if s == 0 {
+            "never".to_string()
+        } else {
+            s.to_string()
+        }
+    );
+}
+
 pub fn run_session(
     device: &str,
     settings: &DaemonSettings,
@@ -87,6 +129,7 @@ pub fn run_session(
     let mut metrics = MetricsCollector::new();
     let _ = metrics.sample(&cfg)?;
     std::thread::sleep(Duration::from_millis(200));
+    push_style(&mut serial, &cfg, &mut metrics);
 
     let mut status_mode = settings.start_in_status;
     let frame_dt = Duration::from_secs_f32(1.0 / fps.max(1.0));
@@ -126,15 +169,26 @@ pub fn run_session(
         if let Some(new_cfg) = maybe_reload(status_config, &cfg) {
             cfg = new_cfg;
             eprintln!("reloaded {}", status_config.display());
+            push_style(&mut serial, &cfg, &mut metrics);
         }
 
-        if serial.poll_toggle() {
-            status_mode = !status_mode;
-            eprintln!("mode → {}", if status_mode { "status" } else { "terminal" });
-            if status_mode {
-                enter_status(&mut keyboard);
-            } else {
-                enter_terminal(&mut pty, &mut keyboard, settings)?;
+        for ev in serial.poll_events() {
+            match ev {
+                DeviceEvent::ModeToggle => {
+                    status_mode = !status_mode;
+                    eprintln!("mode → {}", if status_mode { "status" } else { "terminal" });
+                    if status_mode {
+                        enter_status(&mut keyboard);
+                    } else {
+                        enter_terminal(&mut pty, &mut keyboard, settings)?;
+                    }
+                }
+                DeviceEvent::Brightness(v) => {
+                    apply_device_osd(status_config, &mut cfg, Some(v), None);
+                }
+                DeviceEvent::Sleep(v) => {
+                    apply_device_osd(status_config, &mut cfg, None, Some(v));
+                }
             }
         }
 
@@ -178,8 +232,10 @@ pub fn run_session(
                 last_kb_scan = Instant::now();
             }
 
+            let mut input_activity = false;
             let app_cursor = session.application_cursor();
             for key in keyboard.poll() {
+                input_activity = true;
                 let bytes = if app_cursor {
                     map_app_cursor(&key).unwrap_or(key)
                 } else {
@@ -233,13 +289,14 @@ pub fn run_session(
                             _ => {}
                         }
                         if !bytes.is_empty() {
+                            input_activity = true;
                             let _ = session.write_input(&bytes);
                         }
                     }
                 }
             }
 
-            if last_term.elapsed() >= frame_dt {
+            if last_term.elapsed() >= frame_dt || input_activity {
                 let frame = session.frame();
                 let guard = frame.lock().unwrap();
                 let payload = guard.payload;
@@ -252,6 +309,9 @@ pub fn run_session(
                     if cursor_on {
                         flags |= FLAG_CURSOR_ON;
                     }
+                }
+                if input_activity {
+                    flags |= FLAG_ACTIVITY;
                 }
                 last_term = Instant::now();
                 serial.send_frame(cx, cy, flags, &payload)

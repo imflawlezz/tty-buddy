@@ -6,7 +6,18 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use serialport::{ClearBuffer, SerialPort};
 
-use crate::protocol::{build_frame, DEV_MODE_TOGGLE, FRAME_ACK, FRAME_NAK, PAYLOAD_LEN};
+use crate::protocol::{
+    build_frame, DEV_MODE_TOGGLE, DEV_OSD_BRIGHT, DEV_OSD_SLEEP, FRAME_ACK, FRAME_NAK, PAYLOAD_LEN,
+};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeviceEvent {
+    ModeToggle,
+    /// 0 = auto, 1..=6 = step.
+    Brightness(u8),
+    /// 0 = never, 1..=6 = level.
+    Sleep(u8),
+}
 
 pub struct BuddySerial {
     port: Box<dyn SerialPort>,
@@ -51,20 +62,40 @@ impl BuddySerial {
         }
     }
 
-    /// Returns true if device requested mode toggle.
-    pub fn poll_toggle(&mut self) -> bool {
+    fn is_device_opcode(b: u8) -> bool {
+        matches!(b, DEV_MODE_TOGGLE | DEV_OSD_BRIGHT | DEV_OSD_SLEEP)
+    }
+
+    pub fn poll_events(&mut self) -> Vec<DeviceEvent> {
         self.pump_inbox();
-        let mut toggled = false;
+        let mut out = Vec::new();
         let mut i = 0;
         while i < self.inbox.len() {
-            if self.inbox[i] == DEV_MODE_TOGGLE {
-                toggled = true;
-                self.inbox.remove(i);
-            } else {
-                i += 1;
+            match self.inbox[i] {
+                DEV_MODE_TOGGLE => {
+                    out.push(DeviceEvent::ModeToggle);
+                    self.inbox.remove(i);
+                }
+                DEV_OSD_BRIGHT => {
+                    if i + 1 >= self.inbox.len() {
+                        break;
+                    }
+                    let v = self.inbox[i + 1];
+                    self.inbox.drain(i..=i + 1);
+                    out.push(DeviceEvent::Brightness(v.min(6)));
+                }
+                DEV_OSD_SLEEP => {
+                    if i + 1 >= self.inbox.len() {
+                        break;
+                    }
+                    let v = self.inbox[i + 1];
+                    self.inbox.drain(i..=i + 1);
+                    out.push(DeviceEvent::Sleep(v.min(6)));
+                }
+                _ => i += 1,
             }
         }
-        toggled
+        out
     }
 
     fn wait_ack(&mut self, seq: u8, timeout: Duration) -> Result<bool> {
@@ -83,9 +114,13 @@ impl BuddySerial {
                     self.inbox.drain(..=i + 1);
                     return Ok(false);
                 }
-                if a == DEV_MODE_TOGGLE {
-                    // Leave toggle bytes for poll_toggle.
-                    i += 1;
+                if Self::is_device_opcode(a) {
+                    // Defer to poll_events; OSD opcodes need the following data byte.
+                    if a == DEV_MODE_TOGGLE || i + 1 < self.inbox.len() {
+                        i += if a == DEV_MODE_TOGGLE { 1 } else { 2 };
+                    } else {
+                        break;
+                    }
                     continue;
                 }
                 self.inbox.remove(i);

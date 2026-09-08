@@ -375,17 +375,17 @@ pub(crate) fn parse_status_config_from_str(text: &str) -> StatusUiConfig {
 
     if let Some(osd) = sec.get("osd") {
         let bright_auto = osd
-            .get("default_brightness")
+            .get("brightness")
+            .or_else(|| osd.get("default_brightness"))
             .map(|s| s.trim().eq_ignore_ascii_case("auto"))
             .unwrap_or(false);
         if let Some(v) = osd
-            .get("default_brightness")
-            .or_else(|| osd.get("brightness"))
+            .get("brightness")
+            .or_else(|| osd.get("default_brightness"))
         {
             if bright_auto {
                 st.osd_default_bright_pct = 0;
             } else if let Ok(n) = v.parse::<u8>() {
-                // 1..6 step; values >6 treated as legacy percent by firmware.
                 st.osd_default_bright_pct = n.min(100);
             }
         }
@@ -397,7 +397,6 @@ pub(crate) fn parse_status_config_from_str(text: &str) -> StatusUiConfig {
             st.osd_sleep_timeout_s = if t.is_empty() || t == "never" {
                 0
             } else {
-                // 0..6 level; values >6 treated as legacy seconds by firmware.
                 v.parse().unwrap_or(st.osd_sleep_timeout_s)
             };
         }
@@ -462,6 +461,119 @@ pub fn maybe_reload(path: &Path, current: &StatusUiConfig) -> Option<StatusUiCon
         return None;
     }
     load_status_config(path).ok()
+}
+
+/// Persist OSD brightness/sleep levels into `[osd]` (creates section if missing).
+/// `bright`: 0 = auto, 1..=6 = step. `sleep`: 0 = never, 1..=6 = level.
+pub fn write_osd_levels(path: &Path, bright: u8, sleep: u8) -> Result<()> {
+    let bright = bright.min(6);
+    let sleep = sleep.min(6);
+    let bright_val = if bright == 0 {
+        "auto".to_string()
+    } else {
+        bright.to_string()
+    };
+    let sleep_val = if sleep == 0 {
+        "never".to_string()
+    } else {
+        sleep.to_string()
+    };
+
+    let original = if path.is_file() {
+        fs::read_to_string(path)?
+    } else {
+        String::new()
+    };
+
+    let mut out = String::with_capacity(original.len() + 64);
+    let mut in_osd = false;
+    let mut saw_osd = false;
+    let mut wrote_bright = false;
+    let mut wrote_sleep = false;
+
+    for line in original.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            if in_osd {
+                if !wrote_bright {
+                    out.push_str(&format!("brightness = {bright_val}\n"));
+                    wrote_bright = true;
+                }
+                if !wrote_sleep {
+                    out.push_str(&format!("sleep_timeout = {sleep_val}\n"));
+                    wrote_sleep = true;
+                }
+            }
+            in_osd = trimmed.eq_ignore_ascii_case("[osd]");
+            if in_osd {
+                saw_osd = true;
+            }
+            out.push_str(line);
+            out.push('\n');
+            continue;
+        }
+        if in_osd {
+            let key = trimmed.split('=').next().map(str::trim).unwrap_or("");
+            if key.eq_ignore_ascii_case("brightness")
+                || key.eq_ignore_ascii_case("default_brightness")
+            {
+                if !wrote_bright {
+                    out.push_str(&format!("brightness = {bright_val}\n"));
+                    wrote_bright = true;
+                }
+                continue;
+            }
+            if key.eq_ignore_ascii_case("sleep_timeout")
+                || key.eq_ignore_ascii_case("sleep_timeout_sec")
+            {
+                if !wrote_sleep {
+                    out.push_str(&format!("sleep_timeout = {sleep_val}\n"));
+                    wrote_sleep = true;
+                }
+                continue;
+            }
+            // Drop legacy auto_brightness — brightness=auto is enough.
+            if key.eq_ignore_ascii_case("auto_brightness") {
+                continue;
+            }
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    if in_osd {
+        if !wrote_bright {
+            out.push_str(&format!("brightness = {bright_val}\n"));
+        }
+        if !wrote_sleep {
+            out.push_str(&format!("sleep_timeout = {sleep_val}\n"));
+        }
+    } else if !saw_osd {
+        if !out.is_empty() && !out.ends_with('\n') {
+            out.push('\n');
+        }
+        out.push_str(&format!(
+            "\n[osd]\nbrightness = {bright_val}\nsleep_timeout = {sleep_val}\n"
+        ));
+    }
+
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(path, out)?;
+    Ok(())
+}
+
+/// Same encoding as `write_osd_levels`, in memory only.
+pub fn apply_osd_levels(cfg: &mut StatusUiConfig, bright: u8, sleep: u8) {
+    let bright = bright.min(6);
+    let sleep = sleep.min(6);
+    cfg.style.osd_default_bright_pct = bright;
+    cfg.style.osd_sleep_timeout_s = u16::from(sleep);
+    if bright == 0 {
+        cfg.style.osd_flags |= OSD_F_AUTO_BRIGHT;
+    } else {
+        cfg.style.osd_flags &= !OSD_F_AUTO_BRIGHT;
+    }
 }
 
 #[cfg(test)]
@@ -704,5 +816,27 @@ time_format = %H:%M:%S # 24h
         fs::write(&path, "[header]\ndate_format = %m\n").unwrap();
         let reloaded = maybe_reload(&path, &cfg).expect("mtime change");
         assert_eq!(reloaded.date_format, "%m");
+    }
+
+    #[test]
+    fn write_osd_levels_updates_section() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("status.config");
+        fs::write(
+            &path,
+            "[osd]\nbrightness = 4\nsleep_timeout = 4\nwake_on_alert = true\n",
+        )
+        .unwrap();
+        write_osd_levels(&path, 0, 2).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains("brightness = auto"));
+        assert!(text.contains("sleep_timeout = 2"));
+        assert!(!text.contains("default_brightness"));
+        assert!(!text.contains("auto_brightness"));
+        assert!(text.contains("wake_on_alert = true"));
+        let cfg = load_status_config(&path).unwrap();
+        assert_eq!(cfg.style.osd_default_bright_pct, 0);
+        assert_eq!(cfg.style.osd_sleep_timeout_s, 2);
+        assert_eq!(cfg.style.osd_flags & OSD_F_AUTO_BRIGHT, OSD_F_AUTO_BRIGHT);
     }
 }
