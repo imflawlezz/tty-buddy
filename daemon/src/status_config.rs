@@ -8,8 +8,7 @@ use std::time::SystemTime;
 use anyhow::Result;
 
 use crate::protocol::{
-    parse_hex_color, StatusStyle, METER_OFF, METER_ON, SEC_LOAD, SEC_NONE, SEC_SWAP,
-    SEC_UPTIME,
+    parse_hex_color, StatusStyle, METER_OFF, METER_ON, SEC_LOAD, SEC_NONE, SEC_SWAP, SEC_UPTIME,
 };
 
 #[derive(Debug, Clone)]
@@ -48,16 +47,18 @@ impl Default for StatusUiConfig {
 fn strip_inline_comment(s: &str) -> &str {
     let bytes = s.as_bytes();
     for i in 0..bytes.len() {
-        if (bytes[i] == b'#' || bytes[i] == b';') && i > 0 && bytes[i - 1].is_ascii_whitespace()
-        {
+        if (bytes[i] == b'#' || bytes[i] == b';') && i > 0 && bytes[i - 1].is_ascii_whitespace() {
             return s[..i].trim_end();
         }
     }
     s
 }
 
-fn parse_ini(text: &str) -> (HashMap<String, HashMap<String, String>>, Vec<(String, String)>) {
-    let mut sections: HashMap<String, HashMap<String, String>> = HashMap::new();
+type IniSections = HashMap<String, HashMap<String, String>>;
+type IniParse = (IniSections, Vec<(String, String)>);
+
+fn parse_ini(text: &str) -> IniParse {
+    let mut sections: IniSections = HashMap::new();
     let mut iface_order: Vec<(String, String)> = Vec::new();
     let mut current = String::new();
     for raw in text.lines() {
@@ -113,11 +114,14 @@ pub fn load_status_config(path: &Path) -> Result<StatusUiConfig> {
     }
     let text = fs::read_to_string(path)?;
     let mtime = fs::metadata(path).ok().and_then(|m| m.modified().ok());
-    let (sec, iface_order) = parse_ini(&text);
-    let mut cfg = StatusUiConfig {
-        mtime,
-        ..StatusUiConfig::default()
-    };
+    let mut cfg = parse_status_config_from_str(&text);
+    cfg.mtime = mtime;
+    Ok(cfg)
+}
+
+pub(crate) fn parse_status_config_from_str(text: &str) -> StatusUiConfig {
+    let (sec, iface_order) = parse_ini(text);
+    let mut cfg = StatusUiConfig::default();
     let mut st = StatusStyle::default();
 
     if let Some(g) = sec.get("globals") {
@@ -150,55 +154,51 @@ pub fn load_status_config(path: &Path) -> Result<StatusUiConfig> {
         }
     }
     if let Some(hero) = sec.get("hero") {
-        st.meter_mode = if as_bool(hero.get("meter_mode").map(|s| s.as_str()).unwrap_or("true"), true)
-        {
+        st.meter_mode = if as_bool(
+            hero.get("meter_mode").map(|s| s.as_str()).unwrap_or("true"),
+            true,
+        ) {
             METER_ON
         } else {
             METER_OFF
         };
         st.hero_cpu_c = parse_hex_color(
-            hero
-                .get("cpu_color")
+            hero.get("cpu_color")
                 .or_else(|| hero.get("cpu"))
                 .map(|s| s.as_str())
                 .unwrap_or(""),
             0xFFFF,
         );
         st.hero_mem_c = parse_hex_color(
-            hero
-                .get("mem_color")
+            hero.get("mem_color")
                 .or_else(|| hero.get("mem"))
                 .map(|s| s.as_str())
                 .unwrap_or(""),
             0xFFFF,
         );
         st.hero_disk_c = parse_hex_color(
-            hero
-                .get("disk_color")
+            hero.get("disk_color")
                 .or_else(|| hero.get("disk"))
                 .map(|s| s.as_str())
                 .unwrap_or(""),
             0xFFFF,
         );
         st.level_ok = parse_hex_color(
-            hero
-                .get("level_ok_color")
+            hero.get("level_ok_color")
                 .or_else(|| hero.get("level_ok"))
                 .map(|s| s.as_str())
                 .unwrap_or(""),
             st.level_ok,
         );
         st.level_warn = parse_hex_color(
-            hero
-                .get("level_warn_color")
+            hero.get("level_warn_color")
                 .or_else(|| hero.get("level_warn"))
                 .map(|s| s.as_str())
                 .unwrap_or(""),
             st.level_warn,
         );
         st.level_crit = parse_hex_color(
-            hero
-                .get("level_crit_color")
+            hero.get("level_crit_color")
                 .or_else(|| hero.get("level_crit"))
                 .map(|s| s.as_str())
                 .unwrap_or(""),
@@ -219,10 +219,20 @@ pub fn load_status_config(path: &Path) -> Result<StatusUiConfig> {
     if let Some(secondary) = sec.get("secondary") {
         st.sec_left = sec_id(secondary.get("left").map(|s| s.as_str()).unwrap_or(""));
         st.sec_right = sec_id(secondary.get("right").map(|s| s.as_str()).unwrap_or(""));
-        st.sec_left_c =
-            parse_hex_color(secondary.get("left_color").map(|s| s.as_str()).unwrap_or(""), 0xFFFF);
-        st.sec_right_c =
-            parse_hex_color(secondary.get("right_color").map(|s| s.as_str()).unwrap_or(""), 0xFFFF);
+        st.sec_left_c = parse_hex_color(
+            secondary
+                .get("left_color")
+                .map(|s| s.as_str())
+                .unwrap_or(""),
+            0xFFFF,
+        );
+        st.sec_right_c = parse_hex_color(
+            secondary
+                .get("right_color")
+                .map(|s| s.as_str())
+                .unwrap_or(""),
+            0xFFFF,
+        );
     }
     if !iface_order.is_empty() {
         for (name, mode) in iface_order {
@@ -272,13 +282,12 @@ pub fn load_status_config(path: &Path) -> Result<StatusUiConfig> {
         st.svc_inactive = svc_color("inactive_color", "inactive", def.svc_inactive);
         st.svc_activating = svc_color("activating_color", "activating", def.svc_activating);
         st.svc_reloading = svc_color("reloading_color", "reloading", def.svc_reloading);
-        st.svc_deactivating =
-            svc_color("deactivating_color", "deactivating", def.svc_deactivating);
+        st.svc_deactivating = svc_color("deactivating_color", "deactivating", def.svc_deactivating);
         st.svc_maintenance = svc_color("maintenance_color", "maintenance", def.svc_maintenance);
     }
 
     cfg.style = st;
-    Ok(cfg)
+    cfg
 }
 
 pub fn maybe_reload(path: &Path, current: &StatusUiConfig) -> Option<StatusUiConfig> {
@@ -287,4 +296,149 @@ pub fn maybe_reload(path: &Path, current: &StatusUiConfig) -> Option<StatusUiCon
         return None;
     }
     load_status_config(path).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocol::{rgb565, METER_OFF, METER_ON, SEC_LOAD, SEC_SWAP, SEC_UPTIME};
+    use std::io::Write;
+    use std::thread;
+    use std::time::Duration;
+
+    #[test]
+    fn missing_file_returns_defaults() {
+        let cfg = load_status_config(Path::new("/no/such/status.config")).unwrap();
+        assert_eq!(cfg.date_format, "%d-%m-%Y");
+        assert_eq!(cfg.disk_mount, "/");
+        assert!(cfg.interfaces.is_empty());
+        assert!(cfg.services_filter.is_none());
+        assert_eq!(cfg.style.meter_mode, METER_ON);
+    }
+
+    #[test]
+    fn parses_new_color_keys_and_formats() {
+        let text = r#"
+[globals]
+label_color = #112233
+background_color = #000000
+
+[header]
+hostname_color = #FFFFFF
+date_format = %Y-%m-%d
+time_format = %H:%M
+
+[hero]
+cpu_color = #FF0000
+mem_color = #00FF00
+disk_color = #0000FF
+level_ok_color = #111111
+level_warn_color = #222222
+level_crit_color = #333333
+meter_mode = false
+warn_at = 55
+crit_at = 88
+disk_mount = /data
+
+[secondary]
+left = uptime
+right = load
+left_color = #AAAAAA
+right_color = #BBBBBB
+
+[interfaces]
+eth0 = v4
+wlan0 = auto
+br0 = ipv6
+
+[services]
+filter = ssh, docker.service
+active_color = #010101
+failed_color = #020202
+"#;
+        let cfg = parse_status_config_from_str(text);
+        assert_eq!(cfg.style.label_c, parse_hex_color("#112233", 0));
+        assert_eq!(cfg.style.bg_c, 0);
+        assert_eq!(cfg.date_format, "%Y-%m-%d");
+        assert_eq!(cfg.time_format, "%H:%M");
+        assert_eq!(cfg.disk_mount, "/data");
+        assert_eq!(cfg.style.meter_mode, METER_OFF);
+        assert_eq!(cfg.style.warn_at, 55);
+        assert_eq!(cfg.style.crit_at, 88);
+        assert_eq!(cfg.style.hero_cpu_c, rgb565(0xFF, 0x00, 0x00));
+        assert_eq!(cfg.style.hero_mem_c, rgb565(0x00, 0xFF, 0x00));
+        assert_eq!(cfg.style.hero_disk_c, rgb565(0x00, 0x00, 0xFF));
+        assert_eq!(cfg.style.sec_left, SEC_UPTIME);
+        assert_eq!(cfg.style.sec_right, SEC_LOAD);
+        assert_eq!(
+            cfg.interfaces,
+            vec![
+                ("eth0".into(), IpMode::V4),
+                ("wlan0".into(), IpMode::Auto),
+                ("br0".into(), IpMode::V6),
+            ]
+        );
+        assert_eq!(
+            cfg.services_filter,
+            Some(vec!["ssh".into(), "docker.service".into()])
+        );
+        assert_eq!(cfg.style.svc_active, parse_hex_color("#010101", 0));
+        assert_eq!(cfg.style.svc_failed, parse_hex_color("#020202", 0));
+    }
+
+    #[test]
+    fn accepts_legacy_color_keys_and_all_filter() {
+        let text = r#"
+[globals]
+background = #010203
+[hero]
+cpu = #ABCDEF
+level_ok = #111111
+[secondary]
+left = swap
+right = none
+[services]
+filter = all
+active = #445566
+"#;
+        let cfg = parse_status_config_from_str(text);
+        assert_eq!(cfg.style.bg_c, parse_hex_color("#010203", 0));
+        assert_eq!(cfg.style.hero_cpu_c, parse_hex_color("#ABCDEF", 0));
+        assert_eq!(cfg.style.level_ok, parse_hex_color("#111111", 0));
+        assert_eq!(cfg.style.sec_left, SEC_SWAP);
+        assert_eq!(cfg.style.sec_right, SEC_NONE);
+        assert!(cfg.services_filter.is_none());
+        assert_eq!(cfg.style.svc_active, parse_hex_color("#445566", 0));
+    }
+
+    #[test]
+    fn strips_inline_comments_and_blank_lines() {
+        let text = r#"
+# top comment
+[header]
+date_format = %d-%m-%Y ; european
+time_format = %H:%M:%S # 24h
+"#;
+        let cfg = parse_status_config_from_str(text);
+        assert_eq!(cfg.date_format, "%d-%m-%Y");
+        assert_eq!(cfg.time_format, "%H:%M:%S");
+    }
+
+    #[test]
+    fn maybe_reload_detects_mtime_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("status.config");
+        {
+            let mut f = fs::File::create(&path).unwrap();
+            writeln!(f, "[header]\ndate_format = %Y").unwrap();
+        }
+        let cfg = load_status_config(&path).unwrap();
+        assert_eq!(cfg.date_format, "%Y");
+        assert!(maybe_reload(&path, &cfg).is_none());
+
+        thread::sleep(Duration::from_millis(20));
+        fs::write(&path, "[header]\ndate_format = %m\n").unwrap();
+        let reloaded = maybe_reload(&path, &cfg).expect("mtime change");
+        assert_eq!(reloaded.date_format, "%m");
+    }
 }

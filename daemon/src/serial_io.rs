@@ -6,9 +6,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use serialport::{ClearBuffer, SerialPort};
 
-use crate::protocol::{
-    build_frame, FRAME_ACK, FRAME_NAK, DEV_MODE_TOGGLE, PAYLOAD_LEN,
-};
+use crate::protocol::{build_frame, DEV_MODE_TOGGLE, FRAME_ACK, FRAME_NAK, PAYLOAD_LEN};
 
 pub struct BuddySerial {
     port: Box<dyn SerialPort>,

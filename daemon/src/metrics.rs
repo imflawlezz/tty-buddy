@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::process::Command;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use anyhow::Result;
 use chrono::Local;
@@ -21,6 +21,12 @@ pub struct MetricsCollector {
     net_rates: HashMap<String, (u32, u32)>,
 }
 
+impl Default for MetricsCollector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MetricsCollector {
     pub fn new() -> Self {
         Self {
@@ -31,8 +37,10 @@ impl MetricsCollector {
     }
 
     pub fn sample(&mut self, cfg: &StatusUiConfig) -> Result<StatusSnap> {
-        let mut snap = StatusSnap::default();
-        snap.style = cfg.style.clone();
+        let mut snap = StatusSnap {
+            style: cfg.style.clone(),
+            ..Default::default()
+        };
 
         let host = hostname();
         snap.hostname = host.split('.').next().unwrap_or(&host).to_string();
@@ -140,7 +148,7 @@ fn hostname() -> String {
         })
 }
 
-fn strftime_chrono(fmt: &str, t: &chrono::DateTime<Local>) -> String {
+pub(crate) fn strftime_chrono(fmt: &str, t: &chrono::DateTime<Local>) -> String {
     // status.config uses C/Python-style % tokens; map the common subset to chrono.
     let mut out = String::new();
     let mut chars = fmt.chars().peekable();
@@ -225,7 +233,11 @@ fn mem_info() -> Option<(u32, u32, u8)> {
     }
     let used_kb = total_kb.saturating_sub(avail_kb);
     let pct = ((used_kb as f64 / total_kb as f64) * 100.0).round() as u8;
-    Some(((used_kb / 1024) as u32, (total_kb / 1024) as u32, pct.min(100)))
+    Some((
+        (used_kb / 1024) as u32,
+        (total_kb / 1024) as u32,
+        pct.min(100),
+    ))
 }
 
 fn swap_info() -> Option<(u32, u32, u8)> {
@@ -244,7 +256,11 @@ fn swap_info() -> Option<(u32, u32, u8)> {
     }
     let used_kb = total_kb.saturating_sub(free_kb);
     let pct = ((used_kb as f64 / total_kb as f64) * 100.0).round() as u8;
-    Some(((used_kb / 1024) as u32, (total_kb / 1024) as u32, pct.min(100)))
+    Some((
+        (used_kb / 1024) as u32,
+        (total_kb / 1024) as u32,
+        pct.min(100),
+    ))
 }
 
 fn disk_info(mount: &str) -> Option<(u32, u32, u8)> {
@@ -255,8 +271,8 @@ fn disk_info(mount: &str) -> Option<(u32, u32, u8)> {
         return None;
     }
     let frsize = st.f_frsize as u64;
-    let total = st.f_blocks.saturating_mul(frsize);
-    let avail = st.f_bavail.saturating_mul(frsize);
+    let total = (st.f_blocks as u64).saturating_mul(frsize);
+    let avail = (st.f_bavail as u64).saturating_mul(frsize);
     let used = total.saturating_sub(avail);
     if total == 0 {
         return None;
@@ -280,7 +296,11 @@ fn cpu_temp_c10() -> Option<i16> {
         }
         let typ = fs::read_to_string(path.join("type")).ok()?;
         let typ = typ.trim();
-        let temp: i64 = fs::read_to_string(path.join("temp")).ok()?.trim().parse().ok()?;
+        let temp: i64 = fs::read_to_string(path.join("temp"))
+            .ok()?
+            .trim()
+            .parse()
+            .ok()?;
         if typ.contains("x86_pkg") || typ.contains("cpu") || typ.contains("soc") {
             return Some((temp / 100) as i16); // millidegree → c10
         }
@@ -292,10 +312,14 @@ fn cpu_temp_c10() -> Option<i16> {
 }
 
 fn read_netdev() -> HashMap<String, (u64, u64)> {
-    let mut map = HashMap::new();
     let Ok(s) = fs::read_to_string("/proc/net/dev") else {
-        return map;
+        return HashMap::new();
     };
+    parse_netdev_table(&s)
+}
+
+pub(crate) fn parse_netdev_table(s: &str) -> HashMap<String, (u64, u64)> {
+    let mut map = HashMap::new();
     for line in s.lines().skip(2) {
         let line = line.trim();
         let Some((name, rest)) = line.split_once(':') else {
@@ -317,14 +341,20 @@ fn iface_ip(name: &str, mode: IpMode) -> Option<String> {
     match mode {
         IpMode::V4 => iface_ip_family(name, false),
         IpMode::V6 => iface_ip_family(name, true),
-        IpMode::Auto => iface_ip_family(name, false)
-            .or_else(|| iface_ip_family(name, true)),
+        IpMode::Auto => iface_ip_family(name, false).or_else(|| iface_ip_family(name, true)),
     }
 }
 
 fn iface_ip_family(name: &str, v6: bool) -> Option<String> {
     let out = Command::new("ip")
-        .args(["-o", if v6 { "-6" } else { "-4" }, "addr", "show", "dev", name])
+        .args([
+            "-o",
+            if v6 { "-6" } else { "-4" },
+            "addr",
+            "show",
+            "dev",
+            name,
+        ])
         .output()
         .ok()?;
     let text = String::from_utf8_lossy(&out.stdout);
@@ -349,7 +379,7 @@ fn iface_ip_family(name: &str, v6: bool) -> Option<String> {
     link_local
 }
 
-fn normalize_svc_status(active: &str) -> u8 {
+pub(crate) fn normalize_svc_status(active: &str) -> u8 {
     match active.trim().to_ascii_lowercase().as_str() {
         "active" => ST_SVC_ACTIVE,
         "failed" => ST_SVC_FAILED,
@@ -377,6 +407,10 @@ fn collect_services(filter: Option<&[String]>) -> Vec<StatusSvc> {
         return Vec::new();
     };
     let text = String::from_utf8_lossy(&out.stdout);
+    parse_systemctl_services(&text, filter)
+}
+
+pub(crate) fn parse_systemctl_services(text: &str, filter: Option<&[String]>) -> Vec<StatusSvc> {
     let mut services = Vec::new();
     for line in text.lines() {
         let cols: Vec<&str> = line.split_whitespace().collect();
@@ -420,7 +454,79 @@ fn collect_services(filter: Option<&[String]>) -> Vec<StatusSvc> {
     services
 }
 
-#[allow(dead_code)]
-fn _duration_unused() {
-    let _ = Duration::from_secs(1);
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    #[test]
+    fn svc_status_mapping() {
+        assert_eq!(normalize_svc_status("active"), ST_SVC_ACTIVE);
+        assert_eq!(normalize_svc_status("FAILED"), ST_SVC_FAILED);
+        assert_eq!(normalize_svc_status(" inactive "), ST_SVC_INACTIVE);
+        assert_eq!(normalize_svc_status("activating"), ST_SVC_ACTIVATING);
+        assert_eq!(normalize_svc_status("deactivating"), ST_SVC_DEACTIVATING);
+        assert_eq!(normalize_svc_status("reloading"), ST_SVC_RELOADING);
+        assert_eq!(normalize_svc_status("maintenance"), ST_SVC_MAINTENANCE);
+        assert_eq!(normalize_svc_status("weird"), ST_SVC_MAINTENANCE);
+    }
+
+    #[test]
+    fn strftime_common_tokens() {
+        let t = Local
+            .with_ymd_and_hms(2026, 9, 8, 15, 4, 5)
+            .single()
+            .unwrap();
+        assert_eq!(strftime_chrono("%Y-%m-%d", &t), "2026-09-08");
+        assert_eq!(strftime_chrono("%d-%m-%Y", &t), "08-09-2026");
+        assert_eq!(strftime_chrono("%H:%M:%S", &t), "15:04:05");
+        assert_eq!(strftime_chrono("%%", &t), "%");
+        assert_eq!(strftime_chrono("plain", &t), "plain");
+    }
+
+    #[test]
+    fn netdev_table_parses_rx_tx() {
+        let table = "\
+Inter-|   Receive                                                |  Transmit
+ face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed
+  eth0: 1000 1 0 0 0 0 0 0 2000 2 0 0 0 0 0 0
+ wlan0: 42 0 0 0 0 0 0 0 7 0 0 0 0 0 0 0
+";
+        let map = parse_netdev_table(table);
+        assert_eq!(map.get("eth0"), Some(&(1000, 2000)));
+        assert_eq!(map.get("wlan0"), Some(&(42, 7)));
+    }
+
+    #[test]
+    fn systemctl_services_filter_and_sort() {
+        let text = "\
+ssh.service            loaded active   running OpenSSH
+cron.service           loaded inactive dead    Regular
+broken.service         loaded failed   failed  Boom
+tmpl@.service          loaded active   running skip template
+notaservice.target     loaded active   running ignore
+docker.service         loaded activating start Docker
+";
+        let all = parse_systemctl_services(text, None);
+        assert_eq!(all[0].name, "broken");
+        assert_eq!(all[0].status, ST_SVC_FAILED);
+        assert!(all.iter().any(|s| s.name == "docker"));
+        assert!(!all
+            .iter()
+            .any(|s| s.name.ends_with('@') || s.name == "notaservice"));
+
+        let filter = vec!["ssh".into(), "cron.service".into()];
+        let filtered = parse_systemctl_services(text, Some(&filter));
+        assert_eq!(filtered.len(), 2);
+        assert!(filtered.iter().any(|s| s.name == "ssh"));
+        assert!(filtered.iter().any(|s| s.name == "cron"));
+    }
+
+    #[test]
+    fn systemctl_truncates_long_names() {
+        let long = format!("{}.service loaded active running x", "a".repeat(60));
+        let svcs = parse_systemctl_services(&long, None);
+        assert_eq!(svcs.len(), 1);
+        assert_eq!(svcs[0].name.len(), SVC_NAME_LEN);
+    }
 }

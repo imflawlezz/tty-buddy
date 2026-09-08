@@ -1,22 +1,16 @@
 //! Host daemon for the ESP32 status display and console PTY.
 
-mod bridge;
-mod discover;
-mod keyboard;
-mod metrics;
-mod protocol;
-mod serial_io;
-mod settings;
-mod status_config;
-mod terminal;
-
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
-use crate::discover::{list_serial_devices, resolve_device};
-use crate::settings::{settings_path, DaemonSettings};
+use tty_buddy::bridge;
+use tty_buddy::discover::{list_serial_devices, resolve_device};
+use tty_buddy::metrics::MetricsCollector;
+use tty_buddy::protocol::STATUS_SNAP_LEN;
+use tty_buddy::settings::{settings_path, DaemonSettings};
+use tty_buddy::status_config::load_status_config;
 
 #[derive(Parser, Debug)]
 #[command(name = "tty-buddy", about = "ESP32 tty-buddy host daemon")]
@@ -81,7 +75,7 @@ fn main() -> Result<()> {
 }
 
 fn cmd_setup(config: Option<PathBuf>) -> Result<()> {
-    use std::io::{Write, stdin, stdout};
+    use std::io::{stdin, stdout, Write};
     let path = config.unwrap_or_else(settings_path);
     let devices = list_serial_devices()?;
     if devices.is_empty() {
@@ -184,10 +178,6 @@ fn cmd_run(
 }
 
 fn cmd_probe(status_config: Option<PathBuf>) -> Result<()> {
-    use crate::metrics::MetricsCollector;
-    use crate::protocol::STATUS_SNAP_LEN;
-    use crate::status_config::load_status_config;
-
     let path = status_config.unwrap_or_else(|| {
         if PathBuf::from("status.config").exists() {
             PathBuf::from("status.config")

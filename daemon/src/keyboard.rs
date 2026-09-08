@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 
+#[derive(Default)]
 pub struct Keyboard {
     devices: Vec<Grabbed>,
     shift: bool,
@@ -14,19 +15,6 @@ pub struct Keyboard {
     enabled: bool,
     /// Exclusive grab while console mode is active.
     want_grab: bool,
-}
-
-impl Default for Keyboard {
-    fn default() -> Self {
-        Self {
-            devices: Vec::new(),
-            shift: false,
-            ctrl: false,
-            alt: false,
-            enabled: false,
-            want_grab: false,
-        }
-    }
 }
 
 struct Grabbed {
@@ -102,11 +90,7 @@ impl Keyboard {
                     let fd = file.as_raw_fd();
                     match evdev_grab(fd) {
                         Ok(()) => {
-                            eprintln!(
-                                "keyboard: grabbed {} ({})",
-                                path.display(),
-                                name.trim()
-                            );
+                            eprintln!("keyboard: grabbed {} ({})", path.display(), name.trim());
                             self.devices.push(Grabbed {
                                 path,
                                 name,
@@ -115,10 +99,7 @@ impl Keyboard {
                             });
                         }
                         Err(e) => {
-                            eprintln!(
-                                "keyboard: grab {} failed: {e}",
-                                path.display()
-                            );
+                            eprintln!("keyboard: grab {} failed: {e}", path.display());
                         }
                     }
                 }
@@ -132,11 +113,9 @@ impl Keyboard {
         }
 
         for g in &mut self.devices {
-            if !g.grabbed {
-                if evdev_grab(g.file.as_raw_fd()).is_ok() {
-                    g.grabbed = true;
-                    eprintln!("keyboard: re-grabbed {} ({})", g.path.display(), g.name);
-                }
+            if !g.grabbed && evdev_grab(g.file.as_raw_fd()).is_ok() {
+                g.grabbed = true;
+                eprintln!("keyboard: re-grabbed {} ({})", g.path.display(), g.name);
             }
         }
 
@@ -288,7 +267,7 @@ fn evdev_ungrab(fd: i32) -> Result<()> {
     Ok(())
 }
 
-fn keycode_to_bytes(code: u16, shift: bool, ctrl: bool) -> Option<Vec<u8>> {
+pub(crate) fn keycode_to_bytes(code: u16, shift: bool, ctrl: bool) -> Option<Vec<u8>> {
     let ch = match code {
         1 => return Some(vec![0x1b]),
         14 => return Some(vec![0x7f]),
@@ -299,18 +278,90 @@ fn keycode_to_bytes(code: u16, shift: bool, ctrl: bool) -> Option<Vec<u8>> {
         106 => return Some(b"\x1b[C".to_vec()),
         105 => return Some(b"\x1b[D".to_vec()),
         57 => b' ',
-        2 => if shift { b'!' } else { b'1' },
-        3 => if shift { b'@' } else { b'2' },
-        4 => if shift { b'#' } else { b'3' },
-        5 => if shift { b'$' } else { b'4' },
-        6 => if shift { b'%' } else { b'5' },
-        7 => if shift { b'^' } else { b'6' },
-        8 => if shift { b'&' } else { b'7' },
-        9 => if shift { b'*' } else { b'8' },
-        10 => if shift { b'(' } else { b'9' },
-        11 => if shift { b')' } else { b'0' },
-        12 => if shift { b'_' } else { b'-' },
-        13 => if shift { b'+' } else { b'=' },
+        2 => {
+            if shift {
+                b'!'
+            } else {
+                b'1'
+            }
+        }
+        3 => {
+            if shift {
+                b'@'
+            } else {
+                b'2'
+            }
+        }
+        4 => {
+            if shift {
+                b'#'
+            } else {
+                b'3'
+            }
+        }
+        5 => {
+            if shift {
+                b'$'
+            } else {
+                b'4'
+            }
+        }
+        6 => {
+            if shift {
+                b'%'
+            } else {
+                b'5'
+            }
+        }
+        7 => {
+            if shift {
+                b'^'
+            } else {
+                b'6'
+            }
+        }
+        8 => {
+            if shift {
+                b'&'
+            } else {
+                b'7'
+            }
+        }
+        9 => {
+            if shift {
+                b'*'
+            } else {
+                b'8'
+            }
+        }
+        10 => {
+            if shift {
+                b'('
+            } else {
+                b'9'
+            }
+        }
+        11 => {
+            if shift {
+                b')'
+            } else {
+                b'0'
+            }
+        }
+        12 => {
+            if shift {
+                b'_'
+            } else {
+                b'-'
+            }
+        }
+        13 => {
+            if shift {
+                b'+'
+            } else {
+                b'='
+            }
+        }
         16 => letter(b'q', shift),
         17 => letter(b'w', shift),
         18 => letter(b'e', shift),
@@ -337,20 +388,74 @@ fn keycode_to_bytes(code: u16, shift: bool, ctrl: bool) -> Option<Vec<u8>> {
         48 => letter(b'b', shift),
         49 => letter(b'n', shift),
         50 => letter(b'm', shift),
-        39 => if shift { b':' } else { b';' },
-        40 => if shift { b'"' } else { b'\'' },
-        41 => if shift { b'~' } else { b'`' },
-        43 => if shift { b'|' } else { b'\\' },
-        51 => if shift { b'<' } else { b',' },
-        52 => if shift { b'>' } else { b'.' },
-        53 => if shift { b'?' } else { b'/' },
-        26 => if shift { b'{' } else { b'[' },
-        27 => if shift { b'}' } else { b']' },
+        39 => {
+            if shift {
+                b':'
+            } else {
+                b';'
+            }
+        }
+        40 => {
+            if shift {
+                b'"'
+            } else {
+                b'\''
+            }
+        }
+        41 => {
+            if shift {
+                b'~'
+            } else {
+                b'`'
+            }
+        }
+        43 => {
+            if shift {
+                b'|'
+            } else {
+                b'\\'
+            }
+        }
+        51 => {
+            if shift {
+                b'<'
+            } else {
+                b','
+            }
+        }
+        52 => {
+            if shift {
+                b'>'
+            } else {
+                b'.'
+            }
+        }
+        53 => {
+            if shift {
+                b'?'
+            } else {
+                b'/'
+            }
+        }
+        26 => {
+            if shift {
+                b'{'
+            } else {
+                b'['
+            }
+        }
+        27 => {
+            if shift {
+                b'}'
+            } else {
+                b']'
+            }
+        }
         _ => return None,
     };
     if ctrl {
         let c = ch.to_ascii_lowercase();
-        if (b'a'..=b'z').contains(&c) {
+        if c.is_ascii_lowercase() {
             return Some(vec![c & 0x1f]);
         }
     }
@@ -362,5 +467,42 @@ fn letter(c: u8, shift: bool) -> u8 {
         c.to_ascii_uppercase()
     } else {
         c
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn special_keys() {
+        assert_eq!(keycode_to_bytes(1, false, false), Some(vec![0x1b]));
+        assert_eq!(keycode_to_bytes(14, false, false), Some(vec![0x7f]));
+        assert_eq!(keycode_to_bytes(15, false, false), Some(vec![b'\t']));
+        assert_eq!(keycode_to_bytes(28, false, false), Some(vec![b'\r']));
+        assert_eq!(
+            keycode_to_bytes(103, false, false),
+            Some(b"\x1b[A".to_vec())
+        );
+        assert_eq!(
+            keycode_to_bytes(108, false, false),
+            Some(b"\x1b[B".to_vec())
+        );
+    }
+
+    #[test]
+    fn letters_shift_and_ctrl() {
+        assert_eq!(keycode_to_bytes(30, false, false), Some(vec![b'a']));
+        assert_eq!(keycode_to_bytes(30, true, false), Some(vec![b'A']));
+        assert_eq!(keycode_to_bytes(30, false, true), Some(vec![0x01])); // Ctrl-A
+        assert_eq!(keycode_to_bytes(16, true, false), Some(vec![b'Q']));
+    }
+
+    #[test]
+    fn digits_and_symbols() {
+        assert_eq!(keycode_to_bytes(2, false, false), Some(vec![b'1']));
+        assert_eq!(keycode_to_bytes(2, true, false), Some(vec![b'!']));
+        assert_eq!(keycode_to_bytes(57, false, false), Some(vec![b' ']));
+        assert!(keycode_to_bytes(999, false, false).is_none());
     }
 }

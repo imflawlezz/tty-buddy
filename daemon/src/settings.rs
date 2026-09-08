@@ -77,3 +77,60 @@ pub fn settings_path() -> PathBuf {
     }
     PathBuf::from("/etc/tty-buddy/daemon.toml")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn defaults() {
+        let s = DaemonSettings::default();
+        assert_eq!(s.vid, Some(0x303A));
+        assert_eq!(s.pid, Some(0x1001));
+        assert!(s.start_in_status);
+        assert_eq!(s.fps, 10.0);
+        assert_eq!(
+            s.status_config.as_deref(),
+            Some(std::path::Path::new("/etc/tty-buddy/status.config"))
+        );
+    }
+
+    #[test]
+    fn load_missing_uses_defaults() {
+        let path = PathBuf::from("/no/such/daemon.toml");
+        let s = DaemonSettings::load_or_default(&path);
+        assert_eq!(s.vid, Some(0x303A));
+        assert_eq!(s.fps, 10.0);
+    }
+
+    #[test]
+    fn round_trip_toml() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("daemon.toml");
+        let s = DaemonSettings {
+            device_path: Some("/dev/tty-buddy".into()),
+            fps: 12.5,
+            start_in_status: false,
+            shell_user: Some("dih".into()),
+            ..Default::default()
+        };
+        s.save(&path).unwrap();
+
+        let loaded = DaemonSettings::load_or_default(&path);
+        assert_eq!(loaded.device_path.as_deref(), Some("/dev/tty-buddy"));
+        assert_eq!(loaded.fps, 12.5);
+        assert!(!loaded.start_in_status);
+        assert_eq!(loaded.shell_user.as_deref(), Some("dih"));
+        assert_eq!(loaded.vid, Some(0x303A));
+    }
+
+    #[test]
+    fn invalid_toml_falls_back_to_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bad.toml");
+        fs::write(&path, "[[[not valid").unwrap();
+        let s = DaemonSettings::load_or_default(&path);
+        assert_eq!(s.fps, 10.0);
+        assert!(s.start_in_status);
+    }
+}

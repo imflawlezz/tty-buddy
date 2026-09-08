@@ -59,7 +59,15 @@ fn read_trim(path: &Path) -> Option<String> {
     }
 }
 
-fn usb_props_for_tty(tty_name: &str) -> (Option<u16>, Option<u16>, Option<String>, Option<String>, Option<String>) {
+type UsbProps = (
+    Option<u16>,
+    Option<u16>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
+
+fn usb_props_for_tty(tty_name: &str) -> UsbProps {
     // Walk sysfs parents until idVendor is found (USB device node).
     let mut cur = PathBuf::from(format!("/sys/class/tty/{tty_name}/device"));
     for _ in 0..8 {
@@ -125,10 +133,7 @@ pub fn list_serial_devices() -> Result<Vec<SerialDevice>> {
         if !seen.insert(real.clone()) {
             continue;
         }
-        let base = path
-            .file_name()
-            .and_then(|x| x.to_str())
-            .unwrap_or("");
+        let base = path.file_name().and_then(|x| x.to_str()).unwrap_or("");
         let (vid, pid, serial, product, manufacturer) = usb_props_for_tty(base);
         out.push(SerialDevice {
             path: s,
@@ -140,12 +145,7 @@ pub fn list_serial_devices() -> Result<Vec<SerialDevice>> {
         });
     }
 
-    out.sort_by_key(|d| {
-        (
-            if d.vid == Some(ESP_VID) { 0 } else { 1 },
-            d.path.clone(),
-        )
-    });
+    out.sort_by_key(|d| (if d.vid == Some(ESP_VID) { 0 } else { 1 }, d.path.clone()));
     Ok(out)
 }
 
@@ -168,10 +168,19 @@ fn glob_dev(pattern: &str) -> Result<Vec<PathBuf>> {
 
 pub fn resolve_device(settings: &DaemonSettings) -> Result<String> {
     let devices = list_serial_devices()?;
+    pick_device(&devices, settings, |p| Path::new(p).exists())
+        .ok_or_else(|| anyhow::anyhow!("no serial device available"))
+}
 
+/// Choose a device path from `devices` using settings; `path_exists` is injectable for tests.
+pub(crate) fn pick_device(
+    devices: &[SerialDevice],
+    settings: &DaemonSettings,
+    path_exists: impl Fn(&str) -> bool,
+) -> Option<String> {
     if let Some(ref path) = settings.device_path {
-        if Path::new(path).exists() {
-            return Ok(path.clone());
+        if path_exists(path) {
+            return Some(path.clone());
         }
     }
 
@@ -181,15 +190,18 @@ pub fn resolve_device(settings: &DaemonSettings) -> Result<String> {
             .filter(|d| d.vid == Some(vid) && d.pid == Some(pid))
             .collect();
         if let Some(ref ser) = settings.serial {
-            if let Some(d) = matches.iter().find(|d| d.serial.as_deref() == Some(ser.as_str())) {
-                return Ok(d.path.clone());
+            if let Some(d) = matches
+                .iter()
+                .find(|d| d.serial.as_deref() == Some(ser.as_str()))
+            {
+                return Some(d.path.clone());
             }
         }
         if matches.len() == 1 {
-            return Ok(matches[0].path.clone());
+            return Some(matches[0].path.clone());
         }
         if let Some(d) = matches.first() {
-            return Ok(d.path.clone());
+            return Some(d.path.clone());
         }
     }
 
@@ -197,20 +209,99 @@ pub fn resolve_device(settings: &DaemonSettings) -> Result<String> {
         .iter()
         .filter(|d| d.vid == Some(ESP_VID) && d.pid == Some(ESP_PID_JTAG))
         .collect();
-    if esp.len() == 1 {
-        return Ok(esp[0].path.clone());
-    }
-    if esp.len() > 1 {
-        return Ok(esp[0].path.clone());
+    if !esp.is_empty() {
+        return Some(esp[0].path.clone());
     }
     if devices.len() == 1 {
-        return Ok(devices[0].path.clone());
+        return Some(devices[0].path.clone());
     }
     if !devices.is_empty() {
         if let Some(d) = devices.iter().find(|d| d.path == "/dev/tty-buddy") {
-            return Ok(d.path.clone());
+            return Some(d.path.clone());
         }
-        return Ok(devices[0].path.clone());
+        return Some(devices[0].path.clone());
     }
-    anyhow::bail!("no serial device available")
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dev(path: &str, vid: Option<u16>, pid: Option<u16>, serial: Option<&str>) -> SerialDevice {
+        SerialDevice {
+            path: path.into(),
+            vid,
+            pid,
+            serial: serial.map(str::to_string),
+            product: None,
+            manufacturer: None,
+        }
+    }
+
+    #[test]
+    fn prefers_configured_path_when_present() {
+        let settings = DaemonSettings {
+            device_path: Some("/dev/custom".into()),
+            ..DaemonSettings::default()
+        };
+        let devices = vec![dev("/dev/ttyACM0", Some(ESP_VID), Some(ESP_PID_JTAG), None)];
+        let picked = pick_device(&devices, &settings, |p| p == "/dev/custom");
+        assert_eq!(picked.as_deref(), Some("/dev/custom"));
+    }
+
+    #[test]
+    fn matches_vid_pid_and_serial() {
+        let settings = DaemonSettings {
+            device_path: None,
+            vid: Some(ESP_VID),
+            pid: Some(ESP_PID_JTAG),
+            serial: Some("ABC".into()),
+            ..DaemonSettings::default()
+        };
+        let devices = vec![
+            dev(
+                "/dev/ttyACM0",
+                Some(ESP_VID),
+                Some(ESP_PID_JTAG),
+                Some("ZZZ"),
+            ),
+            dev(
+                "/dev/ttyACM1",
+                Some(ESP_VID),
+                Some(ESP_PID_JTAG),
+                Some("ABC"),
+            ),
+        ];
+        let picked = pick_device(&devices, &settings, |_| false);
+        assert_eq!(picked.as_deref(), Some("/dev/ttyACM1"));
+    }
+
+    #[test]
+    fn falls_back_to_espressif_then_tty_buddy() {
+        let settings = DaemonSettings {
+            device_path: None,
+            vid: None,
+            pid: None,
+            serial: None,
+            ..DaemonSettings::default()
+        };
+        let devices = vec![
+            dev("/dev/ttyUSB0", Some(0x1234), Some(0x5678), None),
+            dev("/dev/ttyACM0", Some(ESP_VID), Some(ESP_PID_JTAG), None),
+        ];
+        assert_eq!(
+            pick_device(&devices, &settings, |_| false).as_deref(),
+            Some("/dev/ttyACM0")
+        );
+
+        let mixed = vec![
+            dev("/dev/ttyUSB0", Some(0x1234), Some(0x5678), None),
+            dev("/dev/tty-buddy", Some(0x1234), Some(0x5678), None),
+        ];
+        assert_eq!(
+            pick_device(&mixed, &settings, |_| false).as_deref(),
+            Some("/dev/tty-buddy")
+        );
+    }
 }

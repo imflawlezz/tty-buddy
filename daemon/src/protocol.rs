@@ -1,4 +1,4 @@
-//! Wire protocol: CRC frames + StatusSnap v11.
+//! Wire protocol: CRC frames and StatusSnap v11.
 
 pub const COLS: usize = 53;
 pub const ROWS: usize = 30;
@@ -281,12 +281,7 @@ impl StatusSnap {
         put(
             &mut out,
             &mut o,
-            &[
-                self.cpu_pct,
-                self.mem_pct,
-                self.disk_pct,
-                self.swap_pct,
-            ],
+            &[self.cpu_pct, self.mem_pct, self.disk_pct, self.swap_pct],
         );
         for v in [
             self.mem_used_mb,
@@ -316,11 +311,7 @@ impl StatusSnap {
             let name = svc.map(|x| x.name.as_str()).unwrap_or("");
             let st = svc.map(|x| x.status).unwrap_or(0);
             put(&mut out, &mut o, &pad_str(name, SVC_NAME_LEN));
-            put(
-                &mut out,
-                &mut o,
-                &[if name.is_empty() { 0 } else { st }],
-            );
+            put(&mut out, &mut o, &[if name.is_empty() { 0 } else { st }]);
         }
         debug_assert_eq!(o, STATUS_SNAP_LEN);
         out
@@ -379,8 +370,148 @@ mod tests {
     #[test]
     fn sizes() {
         assert_eq!(PAYLOAD_LEN, 4770);
+        assert_eq!(FRAME_LEN, 4780);
         assert_eq!(STATUS_SNAP_LEN, 4451);
+        assert_eq!(STYLE_LEN, 45);
         assert_eq!(StatusStyle::default().pack().len(), 45);
         assert_eq!(StatusSnap::default().pack().len(), 4451);
+    }
+
+    #[test]
+    fn crc16_empty_and_known() {
+        assert_eq!(crc16_ccitt(&[]), 0xFFFF);
+        // CRC-CCITT (init 0xFFFF, poly 0x1021) over "123456789"
+        assert_eq!(crc16_ccitt(b"123456789"), 0x29B1);
+    }
+
+    #[test]
+    fn build_frame_layout_and_crc() {
+        let payload = [0u8; PAYLOAD_LEN];
+        let frame = build_frame(7, 10, 20, FLAG_STATUS, &payload);
+        assert_eq!(frame.len(), FRAME_LEN);
+        assert_eq!(&frame[0..4], &FRAME_MAGIC);
+        assert_eq!(frame[4], 7);
+        assert_eq!(frame[5], 10);
+        assert_eq!(frame[6], 20);
+        assert_eq!(frame[7], FLAG_STATUS);
+        let mut crc_buf = Vec::with_capacity(4 + PAYLOAD_LEN);
+        crc_buf.extend_from_slice(&[7, 10, 20, FLAG_STATUS]);
+        crc_buf.extend_from_slice(&payload);
+        let crc = crc16_ccitt(&crc_buf);
+        assert_eq!(frame[FRAME_LEN - 2], (crc >> 8) as u8);
+        assert_eq!(frame[FRAME_LEN - 1], (crc & 0xFF) as u8);
+    }
+
+    #[test]
+    fn rgb565_and_hex_colors() {
+        assert_eq!(rgb565(0xFF, 0x00, 0x00), 0xF800);
+        assert_eq!(rgb565(0x00, 0xFF, 0x00), 0x07E0);
+        assert_eq!(rgb565(0x00, 0x00, 0xFF), 0x001F);
+        assert_eq!(parse_hex_color("#F00", 0), rgb565(0xFF, 0x00, 0x00));
+        assert_eq!(parse_hex_color("#00FF00", 0), rgb565(0x00, 0xFF, 0x00));
+        assert_eq!(parse_hex_color("888888", 1), rgb565(0x88, 0x88, 0x88));
+        assert_eq!(parse_hex_color("", 0x1234), 0x1234);
+        assert_eq!(parse_hex_color("nope", 0xABCD), 0xABCD);
+        assert_eq!(parse_hex_color("#12", 9), 9);
+    }
+
+    #[test]
+    fn style_pack_le_fields() {
+        let st = StatusStyle {
+            label_c: 0xABCD,
+            warn_at: 42,
+            crit_at: 77,
+            meter_mode: METER_OFF,
+            sec_left: SEC_UPTIME,
+            sec_right: SEC_LOAD,
+            ..Default::default()
+        };
+        let b = st.pack();
+        assert_eq!(u16::from_le_bytes([b[0], b[1]]), 0xABCD);
+        assert_eq!(b[22], METER_OFF);
+        assert_eq!(b[23], 42);
+        assert_eq!(b[24], 77);
+        assert_eq!(b[25], SEC_UPTIME);
+        assert_eq!(b[26], SEC_LOAD);
+    }
+
+    #[test]
+    fn snap_pack_magic_ver_and_fields() {
+        let mut snap = StatusSnap {
+            flags: ST_F_HAS_CPU | ST_F_HAS_MEM,
+            hostname: "host-xyz".into(),
+            date: "08-09-2026".into(),
+            time: "15:04:05".into(),
+            load_x100: [123, 456, 789],
+            uptime_sec: 0x11223344,
+            cpu_pct: 10,
+            mem_pct: 20,
+            disk_pct: 30,
+            swap_pct: 40,
+            cpu_temp_c10: -150,
+            ..Default::default()
+        };
+        snap.ifaces.push(StatusIface {
+            name: "eth0".into(),
+            ip: "10.0.0.1".into(),
+            rx_bps: 100,
+            tx_bps: 200,
+        });
+        snap.services.push(StatusSvc {
+            name: "ssh".into(),
+            status: ST_SVC_ACTIVE,
+        });
+        snap.services.push(StatusSvc {
+            name: "x".repeat(SVC_NAME_LEN + 5),
+            status: ST_SVC_FAILED,
+        });
+
+        let packed = snap.pack();
+        assert_eq!(&packed[0..4], b"TBST");
+        assert_eq!(packed[4], STATUS_VER);
+        assert_eq!(packed[5], ST_F_HAS_CPU | ST_F_HAS_MEM);
+
+        let style_end = 6 + STYLE_LEN;
+        let host = &packed[style_end..style_end + 24];
+        assert_eq!(&host[..8], b"host-xyz");
+        assert!(host[8..].iter().all(|&c| c == 0));
+
+        let date_off = style_end + 24;
+        assert_eq!(&packed[date_off..date_off + 10], b"08-09-2026");
+        let time_off = date_off + 20;
+        assert_eq!(&packed[time_off..time_off + 8], b"15:04:05");
+
+        let load_off = time_off + 12;
+        assert_eq!(
+            u16::from_le_bytes([packed[load_off], packed[load_off + 1]]),
+            123
+        );
+        assert_eq!(
+            u16::from_le_bytes([packed[load_off + 2], packed[load_off + 3]]),
+            456
+        );
+
+        let up_off = load_off + 6;
+        assert_eq!(
+            u32::from_le_bytes(packed[up_off..up_off + 4].try_into().unwrap()),
+            0x11223344
+        );
+        assert_eq!(&packed[up_off + 4..up_off + 8], &[10u8, 20, 30, 40]);
+
+        let payload = snap.to_payload();
+        assert_eq!(payload.len(), PAYLOAD_LEN);
+        assert_eq!(&payload[..STATUS_SNAP_LEN], &packed);
+        assert!(payload[STATUS_SNAP_LEN..].iter().all(|&b| b == 0));
+    }
+
+    #[test]
+    fn empty_service_slot_status_is_zero() {
+        let packed = StatusSnap::default().pack();
+        // Services start after fixed header + 16 iface slots (64 bytes each).
+        let iface_block = IFACE_COUNT * (16 + 40 + 4 + 4);
+        let header = 6 + STYLE_LEN + 24 + 20 + 12 + 6 + 4 + 4 + 24 + 2;
+        let svc0 = header + iface_block;
+        assert_eq!(&packed[svc0..svc0 + SVC_NAME_LEN], &[0u8; SVC_NAME_LEN]);
+        assert_eq!(packed[svc0 + SVC_NAME_LEN], 0);
     }
 }

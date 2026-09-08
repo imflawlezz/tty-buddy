@@ -9,17 +9,10 @@ use vt100::{Callbacks, Cell, Color, Parser, Screen};
 
 use crate::protocol::{CELLS, COLS, PAYLOAD_LEN, ROWS};
 
+#[derive(Default)]
 struct QueryCb {
     /// Host replies for DSR / DA / window-size probes.
     replies: Vec<u8>,
-}
-
-impl Default for QueryCb {
-    fn default() -> Self {
-        Self {
-            replies: Vec::new(),
-        }
-    }
 }
 
 impl Callbacks for QueryCb {
@@ -36,12 +29,7 @@ impl Callbacks for QueryCb {
             (None, 'n') => {
                 if p0 == 6 {
                     let (row, col) = screen.cursor_position();
-                    let _ = write!(
-                        self.replies,
-                        "\x1b[{};{}R",
-                        row + 1,
-                        col + 1
-                    );
+                    let _ = write!(self.replies, "\x1b[{};{}R", row + 1, col + 1);
                 } else {
                     self.replies.extend_from_slice(b"\x1b[0n");
                 }
@@ -54,12 +42,7 @@ impl Callbacks for QueryCb {
                 let p1 = params.get(1).and_then(|p| p.first()).copied().unwrap_or(0);
                 match p0 {
                     14 | 16 => {
-                        let _ = write!(
-                            self.replies,
-                            "\x1b[4;{};{}t",
-                            ROWS * 8,
-                            COLS * 6
-                        );
+                        let _ = write!(self.replies, "\x1b[4;{};{}t", ROWS * 8, COLS * 6);
                     }
                     18 => {
                         let _ = write!(self.replies, "\x1b[8;{};{}t", ROWS, COLS);
@@ -170,12 +153,7 @@ impl PtySession {
             master: pair.master,
             reader,
             writer,
-            parser: Parser::new_with_callbacks(
-                ROWS as u16,
-                COLS as u16,
-                0,
-                QueryCb::default(),
-            ),
+            parser: Parser::new_with_callbacks(ROWS as u16, COLS as u16, 0, QueryCb::default()),
             child,
             frame: Arc::new(Mutex::new(TermFrame::default())),
         })
@@ -225,7 +203,10 @@ impl PtySession {
         let mut frame = self.frame.lock().unwrap();
         screen_to_payload(screen, &mut frame.payload);
         let (row, col) = screen.cursor_position();
-        frame.cursor = (col.min((COLS - 1) as u16) as u8, row.min((ROWS - 1) as u16) as u8);
+        frame.cursor = (
+            col.min((COLS - 1) as u16) as u8,
+            row.min((ROWS - 1) as u16) as u8,
+        );
         frame.hide_cursor = screen.hide_cursor();
         frame.application_cursor = screen.application_cursor();
     }
@@ -303,7 +284,7 @@ fn color_to_ansi(c: Color, is_fg: bool) -> u8 {
     }
 }
 
-fn rgb_to_ansi16(r: u8, g: u8, b: u8) -> u8 {
+pub(crate) fn rgb_to_ansi16(r: u8, g: u8, b: u8) -> u8 {
     let palette: [(u8, u8, u8); 16] = [
         (0, 0, 0),
         (170, 0, 0),
@@ -366,4 +347,18 @@ fn resolve_shell(user: Option<&str>) -> (String, String, String) {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".into());
     let home = std::env::var("HOME").unwrap_or_else(|_| format!("/home/{uname}"));
     (shell, home, uname)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rgb_maps_to_nearest_ansi16() {
+        assert_eq!(rgb_to_ansi16(0, 0, 0), 0);
+        assert_eq!(rgb_to_ansi16(255, 255, 255), 15);
+        assert_eq!(rgb_to_ansi16(170, 0, 0), 1);
+        assert_eq!(rgb_to_ansi16(0, 0, 170), 4);
+        assert_eq!(rgb_to_ansi16(255, 85, 85), 9);
+    }
 }

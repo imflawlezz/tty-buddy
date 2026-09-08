@@ -13,9 +13,7 @@ use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use crate::discover::resolve_device;
 use crate::keyboard::Keyboard;
 use crate::metrics::MetricsCollector;
-use crate::protocol::{
-    FLAG_BYE, FLAG_CURSOR_ON, FLAG_CURSOR_VISIBLE, FLAG_STATUS, PAYLOAD_LEN,
-};
+use crate::protocol::{FLAG_BYE, FLAG_CURSOR_ON, FLAG_CURSOR_VISIBLE, FLAG_STATUS, PAYLOAD_LEN};
 use crate::serial_io::BuddySerial;
 use crate::settings::DaemonSettings;
 use crate::status_config::{load_status_config, maybe_reload};
@@ -30,15 +28,12 @@ pub fn run_forever(settings: &DaemonSettings, status_config: &Path, fps: f32) ->
 
     eprintln!("tty-buddy daemon starting (auto-reconnect)");
     while running.load(Ordering::SeqCst) {
-        match resolve_device(settings) {
-            Ok(dev) => {
-                eprintln!("device online: {dev}");
-                if let Err(e) = run_session(&dev, settings, status_config, fps, &running) {
-                    eprintln!("session ended: {e:#}");
-                }
-                eprintln!("waiting for device…");
+        if let Ok(dev) = resolve_device(settings) {
+            eprintln!("device online: {dev}");
+            if let Err(e) = run_session(&dev, settings, status_config, fps, &running) {
+                eprintln!("session ended: {e:#}");
             }
-            Err(_) => {}
+            eprintln!("waiting for device…");
         }
         if !running.load(Ordering::SeqCst) {
             break;
@@ -135,10 +130,7 @@ pub fn run_session(
 
         if serial.poll_toggle() {
             status_mode = !status_mode;
-            eprintln!(
-                "mode → {}",
-                if status_mode { "status" } else { "terminal" }
-            );
+            eprintln!("mode → {}", if status_mode { "status" } else { "terminal" });
             if status_mode {
                 enter_status(&mut keyboard);
             } else {
