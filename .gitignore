@@ -10,8 +10,13 @@ Thumbs.db
 
 # Firmware (PlatformIO)
 firmware/.pio/
+firmware/dist/
 firmware/.vscode/
 firmware/compile_commands.json
+
+# Release artifacts (make release)
+/dist/
+
 
 # Daemon
 daemon/target/
