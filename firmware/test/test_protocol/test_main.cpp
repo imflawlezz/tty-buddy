@@ -23,8 +23,8 @@ void test_crc16_chained_matches_concat(void) {
 }
 
 void test_status_snap_sizes(void) {
-  TEST_ASSERT_EQUAL(52, (int)sizeof(StatusStyle));
-  TEST_ASSERT_EQUAL(4458, (int)sizeof(StatusSnap));
+  TEST_ASSERT_EQUAL(60, (int)sizeof(StatusStyle));
+  TEST_ASSERT_EQUAL(4466, (int)sizeof(StatusSnap));
   TEST_ASSERT_TRUE(sizeof(StatusSnap) <= (size_t)TERM_PAYLOAD);
   TEST_ASSERT_EQUAL(4770, TERM_PAYLOAD);
   TEST_ASSERT_EQUAL(53, TERM_COLS);
@@ -39,6 +39,18 @@ void test_status_snap_valid_and_clear(void) {
   TEST_ASSERT_EQUAL(STATUS_VER, s.ver);
   TEST_ASSERT_EQUAL(255, s.cpu_pct);
   TEST_ASSERT_EQUAL(SEC_NONE, s.style.sec_left);
+}
+
+void test_status_snap_clear_osd_defaults(void) {
+  StatusSnap s{};
+  statusSnapClear(s);
+  TEST_ASSERT_EQUAL(4, s.style.osd_default_bright_pct);
+  TEST_ASSERT_EQUAL(4, s.style.osd_sleep_timeout_s);
+  TEST_ASSERT_EQUAL(OSD_F_DISMISS_ON_TAP | OSD_F_WAKE_ON_ALERT, s.style.osd_flags);
+  TEST_ASSERT_EQUAL(5, s.style.osd_auto_day_pct);
+  TEST_ASSERT_EQUAL(2, s.style.osd_auto_night_pct);
+  TEST_ASSERT_EQUAL(7, s.style.osd_auto_day_hour);
+  TEST_ASSERT_EQUAL(21, s.style.osd_auto_night_hour);
 }
 
 void test_status_layout_with_ifaces_and_secondary(void) {
@@ -137,6 +149,7 @@ int main(int argc, char **argv) {
   RUN_TEST(test_crc16_chained_matches_concat);
   RUN_TEST(test_status_snap_sizes);
   RUN_TEST(test_status_snap_valid_and_clear);
+  RUN_TEST(test_status_snap_clear_osd_defaults);
   RUN_TEST(test_status_layout_with_ifaces_and_secondary);
   RUN_TEST(test_status_layout_without_secondary);
   RUN_TEST(test_status_build_alert_combined);

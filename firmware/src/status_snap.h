@@ -12,7 +12,7 @@ static constexpr char STATUS_MAGIC0 = 'T';
 static constexpr char STATUS_MAGIC1 = 'B';
 static constexpr char STATUS_MAGIC2 = 'S';
 static constexpr char STATUS_MAGIC3 = 'T';
-static constexpr uint8_t STATUS_VER = 12;
+static constexpr uint8_t STATUS_VER = 13;
 
 static constexpr uint8_t ST_F_HAS_TEMP = 0x02;
 static constexpr uint8_t ST_F_HAS_CPU = 0x20;
@@ -41,6 +41,10 @@ static constexpr uint8_t AL_DISK = 1 << 2;
 static constexpr uint8_t AL_TEMP = 1 << 3;
 static constexpr uint8_t AL_SVC_FAILED = 1 << 4;
 static constexpr uint8_t AL_SVC_INACTIVE = 1 << 5;
+
+static constexpr uint8_t OSD_F_DISMISS_ON_TAP = 1 << 0;
+static constexpr uint8_t OSD_F_AUTO_BRIGHT = 1 << 1;
+static constexpr uint8_t OSD_F_WAKE_ON_ALERT = 1 << 2;
 
 static constexpr size_t IFACE_NAME_WIRE = 16;
 static constexpr size_t IFACE_NAME_SHOW = 10;
@@ -88,6 +92,18 @@ struct __attribute__((packed)) StatusStyle {
   uint8_t alert_hold_sec;
   uint8_t alert_mask;
   uint8_t alert_temp_c;
+  /// Session-start seed: 1..6 brightness step, 0 = AUTO.
+  uint8_t osd_default_bright_pct;
+  /// Session-start seed: 0 = never, 1..6 = sleep level.
+  uint16_t osd_sleep_timeout_s;
+  /// `OSD_F_*` bits (live); seeds above apply once per boot.
+  uint8_t osd_flags;
+  /// AUTO daytime brightness step 1..6 (pct name kept for wire layout).
+  uint8_t osd_auto_day_pct;
+  /// AUTO nighttime brightness step 1..6.
+  uint8_t osd_auto_night_pct;
+  uint8_t osd_auto_day_hour;
+  uint8_t osd_auto_night_hour;
 };
 
 struct __attribute__((packed)) StatusIface {
@@ -127,8 +143,8 @@ struct __attribute__((packed)) StatusSnap {
   StatusSvc services[STATUS_SVC_COUNT];
 };
 
-static_assert(sizeof(StatusStyle) == 52, "StatusStyle size");
-static_assert(sizeof(StatusSnap) == 4458, "StatusSnap wire size");
+static_assert(sizeof(StatusStyle) == 60, "StatusStyle size");
+static_assert(sizeof(StatusSnap) == 4466, "StatusSnap wire size");
 static_assert(sizeof(StatusSnap) <= TERM_PAYLOAD, "StatusSnap must fit TERM_PAYLOAD");
 
 inline int statusIfaceCount(const StatusSnap &s) {
@@ -223,6 +239,13 @@ inline void statusSnapClear(StatusSnap &s) {
   s.style.alert_hold_sec = 0;
   s.style.alert_mask = 0;
   s.style.alert_temp_c = 80;
+  s.style.osd_default_bright_pct = 4;
+  s.style.osd_sleep_timeout_s = 4;
+  s.style.osd_flags = OSD_F_DISMISS_ON_TAP | OSD_F_WAKE_ON_ALERT;
+  s.style.osd_auto_day_pct = 5;
+  s.style.osd_auto_night_pct = 2;
+  s.style.osd_auto_day_hour = 7;
+  s.style.osd_auto_night_hour = 21;
 }
 
 inline bool statusAlertAppend(char *out, size_t out_n, const char *piece) {

@@ -1,4 +1,4 @@
-//! Wire protocol: CRC frames and StatusSnap v12.
+//! Wire protocol: CRC frames and StatusSnap v13.
 
 pub const COLS: usize = 53;
 pub const ROWS: usize = 30;
@@ -16,9 +16,9 @@ pub const FLAG_CURSOR_ON: u8 = 0x02;
 pub const FLAG_STATUS: u8 = 0x20;
 pub const FLAG_BYE: u8 = 0x80;
 
-pub const STATUS_VER: u8 = 12;
-pub const STATUS_SNAP_LEN: usize = 4458;
-pub const STYLE_LEN: usize = 52;
+pub const STATUS_VER: u8 = 13;
+pub const STATUS_SNAP_LEN: usize = 4466;
+pub const STYLE_LEN: usize = 60;
 pub const IFACE_COUNT: usize = 16;
 pub const SVC_COUNT: usize = 80;
 pub const SVC_NAME_LEN: usize = 40;
@@ -50,6 +50,10 @@ pub const AL_DISK: u8 = 1 << 2;
 pub const AL_TEMP: u8 = 1 << 3;
 pub const AL_SVC_FAILED: u8 = 1 << 4;
 pub const AL_SVC_INACTIVE: u8 = 1 << 5;
+
+pub const OSD_F_DISMISS_ON_TAP: u8 = 1 << 0;
+pub const OSD_F_AUTO_BRIGHT: u8 = 1 << 1;
+pub const OSD_F_WAKE_ON_ALERT: u8 = 1 << 2;
 
 pub fn crc16_ccitt(data: &[u8]) -> u16 {
     let mut crc: u16 = 0xFFFF;
@@ -119,6 +123,18 @@ pub struct StatusStyle {
     /// `AL_*` bits; 0 = off.
     pub alert_mask: u8,
     pub alert_temp_c: u8,
+    /// Session-start seed: 1..6 brightness step, 0 = AUTO.
+    pub osd_default_bright_pct: u8,
+    /// Session-start seed: 0 = never, 1..6 = sleep level.
+    pub osd_sleep_timeout_s: u16,
+    /// `OSD_F_*` bits (live); seeds above apply once per boot.
+    pub osd_flags: u8,
+    /// AUTO daytime brightness step 1..6 (pct name kept for wire layout).
+    pub osd_auto_day_pct: u8,
+    /// AUTO nighttime brightness step 1..6.
+    pub osd_auto_night_pct: u8,
+    pub osd_auto_day_hour: u8,
+    pub osd_auto_night_hour: u8,
 }
 
 impl Default for StatusStyle {
@@ -154,6 +170,13 @@ impl Default for StatusStyle {
             alert_hold_sec: 0,
             alert_mask: 0,
             alert_temp_c: 80,
+            osd_default_bright_pct: 4,
+            osd_sleep_timeout_s: 4,
+            osd_flags: OSD_F_DISMISS_ON_TAP | OSD_F_WAKE_ON_ALERT,
+            osd_auto_day_pct: 5,
+            osd_auto_night_pct: 2,
+            osd_auto_day_hour: 7,
+            osd_auto_night_hour: 21,
         }
     }
 }
@@ -206,6 +229,15 @@ impl StatusStyle {
         b[o + 1] = self.alert_mask;
         b[o + 2] = self.alert_temp_c;
         o += 3;
+        b[o] = self.osd_default_bright_pct;
+        o += 1;
+        put_u16(&mut b, &mut o, self.osd_sleep_timeout_s);
+        b[o] = self.osd_flags;
+        b[o + 1] = self.osd_auto_day_pct;
+        b[o + 2] = self.osd_auto_night_pct;
+        b[o + 3] = self.osd_auto_day_hour;
+        b[o + 4] = self.osd_auto_night_hour;
+        o += 5;
         debug_assert_eq!(o, STYLE_LEN);
         b
     }
@@ -396,10 +428,10 @@ mod tests {
     fn sizes() {
         assert_eq!(PAYLOAD_LEN, 4770);
         assert_eq!(FRAME_LEN, 4780);
-        assert_eq!(STATUS_SNAP_LEN, 4458);
-        assert_eq!(STYLE_LEN, 52);
-        assert_eq!(StatusStyle::default().pack().len(), 52);
-        assert_eq!(StatusSnap::default().pack().len(), 4458);
+        assert_eq!(STATUS_SNAP_LEN, 4466);
+        assert_eq!(STYLE_LEN, 60);
+        assert_eq!(StatusStyle::default().pack().len(), 60);
+        assert_eq!(StatusSnap::default().pack().len(), 4466);
     }
 
     #[test]
@@ -458,6 +490,29 @@ mod tests {
         assert_eq!(b[24], 77);
         assert_eq!(b[25], SEC_UPTIME);
         assert_eq!(b[26], SEC_LOAD);
+    }
+
+    #[test]
+    fn style_pack_osd_fields() {
+        let st = StatusStyle {
+            osd_default_bright_pct: 4,
+            osd_sleep_timeout_s: 3,
+            osd_flags: OSD_F_DISMISS_ON_TAP | OSD_F_AUTO_BRIGHT,
+            osd_auto_day_pct: 5,
+            osd_auto_night_pct: 2,
+            osd_auto_day_hour: 6,
+            osd_auto_night_hour: 22,
+            ..Default::default()
+        };
+        let b = st.pack();
+        let o = STYLE_LEN - 8;
+        assert_eq!(b[o], 4);
+        assert_eq!(u16::from_le_bytes([b[o + 1], b[o + 2]]), 3);
+        assert_eq!(b[o + 3], OSD_F_DISMISS_ON_TAP | OSD_F_AUTO_BRIGHT);
+        assert_eq!(b[o + 4], 5);
+        assert_eq!(b[o + 5], 2);
+        assert_eq!(b[o + 6], 6);
+        assert_eq!(b[o + 7], 22);
     }
 
     #[test]
