@@ -393,21 +393,66 @@ pub(crate) fn normalize_svc_status(active: &str) -> u8 {
 }
 
 fn collect_services(filter: Option<&[String]>) -> Vec<StatusSvc> {
-    let out = Command::new("systemctl")
-        .args([
-            "list-units",
-            "--type=service",
-            "--all",
-            "--no-legend",
-            "--no-pager",
-            "--plain",
-        ])
+    match filter {
+        Some(names) => collect_filtered_services(names),
+        None => {
+            let out = Command::new("systemctl")
+                .args([
+                    "list-units",
+                    "--type=service",
+                    "--all",
+                    "--no-legend",
+                    "--no-pager",
+                    "--plain",
+                ])
+                .output();
+            let Ok(out) = out else {
+                return Vec::new();
+            };
+            let text = String::from_utf8_lossy(&out.stdout);
+            parse_systemctl_services(&text, None)
+        }
+    }
+}
+
+/// `list-units --all` omits unloaded stopped units; query ActiveState instead.
+fn collect_filtered_services(filter: &[String]) -> Vec<StatusSvc> {
+    let mut services = Vec::with_capacity(filter.len().min(SVC_COUNT));
+    for entry in filter.iter().take(SVC_COUNT) {
+        let unit = if entry.ends_with(".service") {
+            entry.clone()
+        } else {
+            format!("{entry}.service")
+        };
+        let name = unit.trim_end_matches(".service");
+        if name.ends_with('@') {
+            continue;
+        }
+        services.push(StatusSvc {
+            name: name.chars().take(SVC_NAME_LEN).collect(),
+            status: query_svc_active_state(&unit),
+        });
+    }
+    services
+}
+
+fn query_svc_active_state(unit: &str) -> u8 {
+    let show = Command::new("systemctl")
+        .args(["show", "-p", "ActiveState", "--value", unit])
         .output();
-    let Ok(out) = out else {
-        return Vec::new();
-    };
-    let text = String::from_utf8_lossy(&out.stdout);
-    parse_systemctl_services(&text, filter)
+    if let Ok(out) = show {
+        let state = String::from_utf8_lossy(&out.stdout);
+        let state = state.trim();
+        if !state.is_empty() {
+            return normalize_svc_status(state);
+        }
+    }
+    // is-active prints the state on stdout even when the exit status is non-zero.
+    let active = Command::new("systemctl").args(["is-active", unit]).output();
+    match active {
+        Ok(out) => normalize_svc_status(String::from_utf8_lossy(&out.stdout).trim()),
+        Err(_) => ST_SVC_MAINTENANCE,
+    }
 }
 
 pub(crate) fn parse_systemctl_services(text: &str, filter: Option<&[String]>) -> Vec<StatusSvc> {
@@ -436,11 +481,11 @@ pub(crate) fn parse_systemctl_services(text: &str, filter: Option<&[String]>) ->
             name: name.chars().take(SVC_NAME_LEN).collect(),
             status: normalize_svc_status(active),
         });
-        if services.len() >= SVC_COUNT {
+        if filter.is_some() && services.len() >= SVC_COUNT {
             break;
         }
     }
-    // Unfiltered: surface failed/transitioning units before a long active list.
+    // Unfiltered: failed/transitioning first, then truncate to wire capacity.
     if filter.is_none() {
         services.sort_by_key(|s| match s.status {
             ST_SVC_FAILED => 0,
@@ -520,6 +565,24 @@ docker.service         loaded activating start Docker
         assert_eq!(filtered.len(), 2);
         assert!(filtered.iter().any(|s| s.name == "ssh"));
         assert!(filtered.iter().any(|s| s.name == "cron"));
+        assert_eq!(
+            filtered.iter().find(|s| s.name == "cron").unwrap().status,
+            ST_SVC_INACTIVE
+        );
+    }
+
+    #[test]
+    fn systemctl_unfiltered_prioritizes_late_failed() {
+        let mut lines = Vec::new();
+        for i in 0..100 {
+            lines.push(format!("svc{i}.service loaded active running x"));
+        }
+        lines.push("zzz-late.service loaded failed failed Boom".into());
+        let text = lines.join("\n");
+        let all = parse_systemctl_services(&text, None);
+        assert_eq!(all.len(), SVC_COUNT);
+        assert_eq!(all[0].name, "zzz-late");
+        assert_eq!(all[0].status, ST_SVC_FAILED);
     }
 
     #[test]
