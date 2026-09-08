@@ -1,5 +1,7 @@
 #include "osd.h"
 
+#include <Preferences.h>
+
 #include "protocol.h"
 #include "status_ui.h"
 
@@ -9,7 +11,10 @@
 namespace osd {
 namespace {
 
-constexpr const char *FW_STRING = "FW v1.0.0-080926";
+#ifndef TTY_BUDDY_VERSION
+#define TTY_BUDDY_VERSION "0.0.0"
+#endif
+constexpr const char *FW_STRING = "FW v" TTY_BUDDY_VERSION;
 constexpr uint16_t COL_FW = TFT_YELLOW;
 
 constexpr int PIN_BL = 5;
@@ -67,8 +72,11 @@ bool g_alert_was_up = false;
 uint8_t g_bright_step = 4;
 bool g_auto_bright = false;
 uint8_t g_sleep_level = 4;
-bool g_defaults_applied = false;
 bool g_was_status = false;
+uint8_t g_host_bright = 0xFF;
+uint8_t g_host_sleep = 0xFF;
+uint32_t g_ignore_host_osd_until = 0;
+Preferences g_prefs;
 
 bool g_dismiss_on_tap_cfg = true;
 bool g_wake_on_alert_cfg = true;
@@ -143,7 +151,89 @@ void recomputeAutoBrightness() {
   }
 }
 
+void persistOsd() {
+  if (!g_prefs.begin("osd", false))
+    return;
+  g_prefs.putUChar("bright", g_auto_bright ? 0 : g_bright_step);
+  g_prefs.putUChar("sleep", g_sleep_level);
+  g_prefs.end();
+}
+
+void loadOsdFromEeprom() {
+  if (!g_prefs.begin("osd", true))
+    return;
+  if (g_prefs.isKey("bright")) {
+    uint8_t b = g_prefs.getUChar("bright", 4);
+    if (b == 0) {
+      g_auto_bright = true;
+      g_bright_step = computeAutoStep();
+    } else {
+      g_auto_bright = false;
+      g_bright_step = clampStep(b, 4);
+    }
+    g_host_bright = b;
+  }
+  if (g_prefs.isKey("sleep")) {
+    g_sleep_level = clampSleep(g_prefs.getUChar("sleep", 4));
+    g_host_sleep = g_sleep_level;
+  }
+  g_prefs.end();
+  applyBacklight();
+}
+
+void reportOsdBright() {
+  Serial.write(DEV_OSD_BRIGHT);
+  Serial.write(g_auto_bright ? 0 : g_bright_step);
+}
+
+void reportOsdSleep() {
+  Serial.write(DEV_OSD_SLEEP);
+  Serial.write(g_sleep_level);
+}
+
+void applyBrightFromHost(uint8_t b) {
+  auto mapBright = [](uint8_t v, uint8_t def) -> uint8_t {
+    if (v >= 1 && v <= BRIGHT_STEPS)
+      return v;
+    if (v > BRIGHT_STEPS)
+      return clampStep((uint8_t)(((uint16_t)v * BRIGHT_STEPS + 50) / 100), def);
+    return def;
+  };
+  if (b == 0) {
+    g_auto_bright = true;
+    g_bright_step = computeAutoStep();
+  } else {
+    g_auto_bright = false;
+    g_bright_step = mapBright(b, 4);
+  }
+  g_host_bright = b;
+  applyBacklight();
+  persistOsd();
+  if (g_open)
+    g_row_dirty[ITEM_BRIGHT] = true;
+}
+
+void applySleepFromHost(uint16_t sl) {
+  if (sl <= SLEEP_STEPS) {
+    g_sleep_level = (uint8_t)sl;
+  } else {
+    g_sleep_level = SLEEP_STEPS;
+    for (uint8_t i = 0; i <= SLEEP_STEPS; i++) {
+      if (SLEEP_SECS[i] >= sl) {
+        g_sleep_level = i;
+        break;
+      }
+    }
+  }
+  g_host_sleep = g_sleep_level;
+  persistOsd();
+  if (g_open)
+    g_row_dirty[ITEM_SLEEP] = true;
+}
+
 void syncFromStyle() {
+  if (!g_term->hasStatusSnap())
+    return;
   const StatusStyle &st = g_term->statusSnap().style;
 
   g_dismiss_on_tap_cfg = (st.osd_flags & OSD_F_DISMISS_ON_TAP) != 0;
@@ -161,30 +251,33 @@ void syncFromStyle() {
   g_auto_day_step = mapBright(st.osd_auto_day_pct, 5);
   g_auto_night_step = mapBright(st.osd_auto_night_pct, 2);
 
-  if (!g_defaults_applied && g_term->hasStatusSnap()) {
-    uint8_t b = st.osd_default_bright_pct;
-    if (b == 0) {
-      g_auto_bright = true;
-      g_bright_step = computeAutoStep();
-    } else {
-      g_auto_bright = false;
-      g_bright_step = mapBright(b, 4);
-    }
+  // Host style is SoT once linked; NVS applies until the first style/status frame.
+  if (millis() < g_ignore_host_osd_until)
+    return;
+
+  uint8_t b = st.osd_default_bright_pct;
+  if ((st.osd_flags & OSD_F_AUTO_BRIGHT) != 0)
+    b = 0;
+  uint8_t sleep_lv;
+  {
     uint16_t sl = st.osd_sleep_timeout_s;
     if (sl <= SLEEP_STEPS) {
-      g_sleep_level = (uint8_t)sl;
+      sleep_lv = (uint8_t)sl;
     } else {
-      g_sleep_level = SLEEP_STEPS;
+      sleep_lv = SLEEP_STEPS;
       for (uint8_t i = 0; i <= SLEEP_STEPS; i++) {
         if (SLEEP_SECS[i] >= sl) {
-          g_sleep_level = i;
+          sleep_lv = i;
           break;
         }
       }
     }
-    g_defaults_applied = true;
-    applyBacklight();
   }
+
+  if (b != g_host_bright)
+    applyBrightFromHost(b);
+  if (sleep_lv != g_host_sleep)
+    applySleepFromHost(st.osd_sleep_timeout_s);
 }
 
 void cycleBrightness() {
@@ -197,11 +290,19 @@ void cycleBrightness() {
   } else {
     g_bright_step++;
   }
+  g_host_bright = g_auto_bright ? 0 : g_bright_step;
+  g_ignore_host_osd_until = millis() + 2500;
   applyBacklight();
+  persistOsd();
+  reportOsdBright();
 }
 
 void cycleSleep() {
   g_sleep_level = (uint8_t)((g_sleep_level + 1) % (SLEEP_STEPS + 1));
+  g_host_sleep = g_sleep_level;
+  g_ignore_host_osd_until = millis() + 2500;
+  persistOsd();
+  reportOsdSleep();
 }
 
 const char *itemLabel(uint8_t item) {
@@ -352,9 +453,11 @@ void closeOsd() {
     return;
   g_open = false;
   setOverlayHole(false);
-  if (g_term->statusUiActive())
-    g_term->requestStatusRepaint(/*full=*/true);
-  else {
+  if (g_term->statusUiActive()) {
+    statusGuiRestoreRegion(g_tft, g_term->statusSnap(), PX_X0, PX_Y0, PANEL_W,
+                           PANEL_H);
+  } else {
+    // Hole updated prev_* without painting; black fill + invalidate restores cells.
     g_tft->fillRect(PX_X0, PX_Y0, PANEL_W, PANEL_H, TFT_BLACK);
     g_term->invalidateCells(CELL_X0, CELL_Y0, OSD_COLS, OSD_ROWS);
   }
@@ -405,7 +508,9 @@ void handleShortPress(uint32_t now) {
 
 void handleLongPress(uint32_t now) {
   if (!g_open) {
-    openOsd(now);
+    // Idle long-press: silent mode toggle (no OSD).
+    Serial.write(DEV_MODE_TOGGLE);
+    g_last_activity_ms = now;
     return;
   }
   switch (g_item) {
@@ -468,6 +573,7 @@ void begin(TFT_eSPI *tft, Terminal *term) {
   pinMode(PIN_BTN, INPUT_PULLUP);
   ledcSetup(BL_PWM_CH, BL_PWM_FREQ, BL_PWM_BITS);
   ledcAttachPin(PIN_BL, BL_PWM_CH);
+  loadOsdFromEeprom();
   applyBacklight();
 }
 
@@ -496,6 +602,13 @@ void tick(uint32_t now) {
 }
 
 void paint() { paintDirty(); }
+
+void noteActivity(uint32_t now) {
+  if (g_asleep)
+    wake(now);
+  else
+    g_last_activity_ms = now;
+}
 
 bool isOpen() { return g_open; }
 bool isAsleep() { return g_asleep; }

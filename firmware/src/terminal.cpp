@@ -2,6 +2,8 @@
 
 #include <string.h>
 
+#include "osd.h"
+
 static const uint16_t kAnsi16[16] = {
     0x0000, 0xA800, 0x0540, 0xAB40, 0x0015, 0xA815, 0x0555, 0xAD55,
     0x52AA, 0xF800, 0x07E0, 0xFFE0, 0x001F, 0xF81F, 0x07FF, 0xFFFF,
@@ -548,6 +550,21 @@ void Terminal::applyPayload() {
     return;
   }
 
+  if (rx_flags_ & FLAG_ACTIVITY)
+    osd::noteActivity(millis());
+
+  if (rx_flags_ & FLAG_STYLE) {
+    StatusSnap next{};
+    if (TERM_PAYLOAD >= sizeof(StatusSnap))
+      memcpy(&next, payload_, sizeof(StatusSnap));
+    if (statusSnapValid(next)) {
+      linked_ = true;
+      status_seen_ = true;
+      status_.style = next.style;
+    }
+    return;
+  }
+
   if (rx_flags_ & FLAG_STATUS) {
     StatusSnap next{};
     if (TERM_PAYLOAD >= sizeof(StatusSnap))
@@ -597,7 +614,7 @@ void Terminal::applyPayload() {
   }
   cur_x_ = (int8_t)rx_cx_;
   cur_y_ = (int8_t)rx_cy_;
-  cur_flags_ = rx_flags_ & (uint8_t)~(FLAG_BYE | FLAG_STATUS);
+  cur_flags_ = rx_flags_ & (uint8_t)~(FLAG_BYE | FLAG_STATUS | FLAG_STYLE);
   linked_ = true;
 }
 

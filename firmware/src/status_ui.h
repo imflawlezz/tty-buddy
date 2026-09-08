@@ -16,3 +16,11 @@ void statusGuiDismissAlert();
 
 /** Skip painting this pixel rect (OSD). Zero size clears. */
 void statusGuiSetOverlay(int x, int y, int w, int h);
+
+/**
+ * After OSD closes: fill `x,y,w,h` with status bg and repaint only widgets
+ * that intersect that rect (no full-screen wipe).
+ */
+void statusGuiRestoreRegion(TFT_eSPI *tft, const StatusSnap &s, int x, int y,
+                            int w, int h);
+

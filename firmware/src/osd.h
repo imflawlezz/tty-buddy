@@ -10,8 +10,11 @@ namespace osd {
 
 void begin(TFT_eSPI *tft, Terminal *term);
 void tick(uint32_t now);
-/** Dirty-row redraw only; call after content paint so wipes can be restored. */
+/** Dirty-row redraw; call after content paint so wipes can be restored. */
 void paint();
+
+/** Reset sleep timer and wake if asleep (host keyboard / FLAG_ACTIVITY). */
+void noteActivity(uint32_t now);
 
 bool isOpen();
 bool isAsleep();

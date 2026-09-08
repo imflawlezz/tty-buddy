@@ -24,6 +24,9 @@ static bool g_chrome = false;
 static bool g_hole_on = false;
 static int g_hole_x = 0, g_hole_y = 0, g_hole_w = 0, g_hole_h = 0;
 
+static bool g_restore_on = false;
+static int g_restore_x = 0, g_restore_y = 0, g_restore_w = 0, g_restore_h = 0;
+
 static char g_s_host[25]{};
 static char g_s_date[21]{};
 static char g_s_time[13]{};
@@ -144,11 +147,23 @@ void statusGuiSetOverlay(int x, int y, int w, int h) {
   g_hole_on = true;
 }
 
+static bool rectsOverlap(int ax, int ay, int aw, int ah, int bx, int by, int bw,
+                         int bh) {
+  if (aw <= 0 || ah <= 0 || bw <= 0 || bh <= 0)
+    return false;
+  return !(ax + aw <= bx || ax >= bx + bw || ay + ah <= by || ay >= by + bh);
+}
+
+static bool hitsRestore(int x, int y, int w, int h) {
+  return g_restore_on &&
+         rectsOverlap(x, y, w, h, g_restore_x, g_restore_y, g_restore_w,
+                      g_restore_h);
+}
+
 static bool hitsHole(int x, int y, int w, int h) {
   if (!g_hole_on || w <= 0 || h <= 0)
     return false;
-  return !(x + w <= g_hole_x || x >= g_hole_x + g_hole_w || y + h <= g_hole_y ||
-           y >= g_hole_y + g_hole_h);
+  return rectsOverlap(x, y, w, h, g_hole_x, g_hole_y, g_hole_w, g_hole_h);
 }
 
 static void applyTheme(const StatusStyle &st) {
@@ -500,14 +515,17 @@ static bool servicesEqual(const StatusSnap &a, const StatusSnap &b) {
 static bool paintSlot1(TFT_eSPI *tft, int x, int y, int slot_w, char *cache,
                        size_t cache_n, const char *text, uint16_t col,
                        bool force) {
-  if (!force && strncmp(cache, text, cache_n) == 0)
+  const bool restore = hitsRestore(x, y, slot_w, FONT1_H);
+  if (!force && !restore && strncmp(cache, text, cache_n) == 0)
     return false;
+  if (restore)
+    clearRect(tft, x, y, slot_w, FONT1_H);
   const int old_w = cache[0] ? (int)strlen(cache) * FONT1_W : 0;
   drawText1(tft, x, y, text, col);
   const int new_w = (int)strlen(text) * FONT1_W;
   if (old_w > new_w)
     clearRect(tft, x + new_w, y, old_w - new_w, FONT1_H);
-  else if (new_w < slot_w && force)
+  else if (new_w < slot_w && (force || restore))
     clearRect(tft, x + new_w, y, slot_w - new_w, FONT1_H);
   strncpy(cache, text, cache_n - 1);
   cache[cache_n - 1] = 0;
@@ -517,7 +535,9 @@ static bool paintSlot1(TFT_eSPI *tft, int x, int y, int slot_w, char *cache,
 static bool paintSlotBig(TFT_eSPI *tft, int x, int y, int slot_w, char *cache,
                          size_t cache_n, const char *text, uint16_t col,
                          uint16_t *col_cache, bool force) {
-  if (!force && strncmp(cache, text, cache_n) == 0 && *col_cache == col)
+  const bool restore = hitsRestore(x, y, slot_w, FONT4_H);
+  if (!force && !restore && strncmp(cache, text, cache_n) == 0 &&
+      *col_cache == col)
     return false;
   tft->setTextFont(4);
   const int old_w = cache[0] ? tft->textWidth(cache, 4) : slot_w;
@@ -525,7 +545,10 @@ static bool paintSlotBig(TFT_eSPI *tft, int x, int y, int slot_w, char *cache,
   int cw = old_w > new_w ? old_w : new_w;
   if (cw > slot_w)
     cw = slot_w;
-  clearRect(tft, x, y, cw, FONT4_H);
+  if (restore)
+    clearRect(tft, x, y, slot_w, FONT4_H);
+  else
+    clearRect(tft, x, y, cw, FONT4_H);
   drawBig(tft, x, y, text, col);
   strncpy(cache, text, cache_n - 1);
   cache[cache_n - 1] = 0;
@@ -578,8 +601,11 @@ static void paintHeader(TFT_eSPI *tft, const StatusSnap &s, bool force) {
 
   constexpr int time_w = 8 * FONT1_W;
   constexpr int time_x = 316 - time_w;
-  if (force || strncmp(g_s_time, tim, sizeof(g_s_time)) != 0) {
+  const bool time_restore = hitsRestore(time_x, 4, time_w, FONT1_H);
+  if (force || time_restore || strncmp(g_s_time, tim, sizeof(g_s_time)) != 0) {
     if (!hitsHole(time_x, 4, time_w, FONT1_H)) {
+      if (time_restore)
+        clearRect(tft, time_x, 4, time_w, FONT1_H);
       const int old_w = g_s_time[0] ? (int)strlen(g_s_time) * FONT1_W : time_w;
       tft->setTextDatum(TR_DATUM);
       tft->setTextFont(1);
@@ -954,4 +980,42 @@ void paintStatusGui(TFT_eSPI *tft, const StatusSnap &s, bool force_full) {
   g_prev = s;
   g_prev_layout = L;
   g_have_prev = true;
+}
+
+void statusGuiRestoreRegion(TFT_eSPI *tft, const StatusSnap &s, int x, int y,
+                            int w, int h) {
+  if (!tft || w <= 0 || h <= 0)
+    return;
+  applyTheme(s.style);
+  tft->fillRect(x, y, w, h, g_bg);
+  g_restore_on = true;
+  g_restore_x = x;
+  g_restore_y = y;
+  g_restore_w = w;
+  g_restore_h = h;
+
+  const StatusLayout L = statusLayoutOf(s);
+  if (hitsRestore(6, L.y_hero_label, 300, FONT1_H) ||
+      hitsRestore(6, L.y_hero_sub, 48, FONT1_H))
+    paintHeroLabels(tft, L);
+  if (L.secondary && hitsRestore(6, L.y_secondary, 300, FONT1_H)) {
+    if (s.style.sec_left != SEC_NONE)
+      drawText1(tft, 6, L.y_secondary, secLabel(s.style.sec_left), g_label);
+    if (s.style.sec_right != SEC_NONE)
+      drawText1(tft, 168, L.y_secondary, secLabel(s.style.sec_right), g_label);
+  }
+  for (int i = 0; i < L.iface_n; i++) {
+    const int iy = L.y_net0 + i * STATUS_IFACE_STEP;
+    if (hitsRestore(200, iy, 100, FONT1_H)) {
+      drawText1(tft, 200, iy, "RX:", COL_RX);
+      drawText1(tft, 258, iy, "TX:", COL_TX);
+    }
+  }
+
+  paintHeader(tft, s, false);
+  paintHero(tft, s, L, false);
+  paintSecondary(tft, s, L, false);
+  paintNet(tft, s, L, false);
+
+  g_restore_on = false;
 }
