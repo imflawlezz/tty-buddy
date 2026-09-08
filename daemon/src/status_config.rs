@@ -9,7 +9,8 @@ use anyhow::Result;
 
 use crate::protocol::{
     parse_hex_color, StatusStyle, AL_CPU, AL_DISK, AL_MEM, AL_SVC_FAILED, AL_SVC_INACTIVE, AL_TEMP,
-    METER_OFF, METER_ON, SEC_LOAD, SEC_NONE, SEC_SWAP, SEC_UPTIME,
+    METER_OFF, METER_ON, OSD_F_AUTO_BRIGHT, OSD_F_DISMISS_ON_TAP, OSD_F_WAKE_ON_ALERT, SEC_LOAD,
+    SEC_NONE, SEC_SWAP, SEC_UPTIME,
 };
 
 #[derive(Debug, Clone)]
@@ -372,6 +373,85 @@ pub(crate) fn parse_status_config_from_str(text: &str) -> StatusUiConfig {
         st.alert_mask = mask;
     }
 
+    if let Some(osd) = sec.get("osd") {
+        let bright_auto = osd
+            .get("default_brightness")
+            .map(|s| s.trim().eq_ignore_ascii_case("auto"))
+            .unwrap_or(false);
+        if let Some(v) = osd
+            .get("default_brightness")
+            .or_else(|| osd.get("brightness"))
+        {
+            if bright_auto {
+                st.osd_default_bright_pct = 0;
+            } else if let Ok(n) = v.parse::<u8>() {
+                // 1..6 step; values >6 treated as legacy percent by firmware.
+                st.osd_default_bright_pct = n.min(100);
+            }
+        }
+        if let Some(v) = osd
+            .get("sleep_timeout")
+            .or_else(|| osd.get("sleep_timeout_sec"))
+        {
+            let t = v.trim().to_ascii_lowercase();
+            st.osd_sleep_timeout_s = if t.is_empty() || t == "never" {
+                0
+            } else {
+                // 0..6 level; values >6 treated as legacy seconds by firmware.
+                v.parse().unwrap_or(st.osd_sleep_timeout_s)
+            };
+        }
+        let mut flags = 0u8;
+        if as_bool(
+            osd.get("dismiss_alert_on_tap")
+                .map(|s| s.as_str())
+                .unwrap_or("true"),
+            true,
+        ) {
+            flags |= OSD_F_DISMISS_ON_TAP;
+        }
+        if bright_auto
+            || as_bool(
+                osd.get("auto_brightness")
+                    .map(|s| s.as_str())
+                    .unwrap_or("false"),
+                false,
+            )
+        {
+            flags |= OSD_F_AUTO_BRIGHT;
+            if bright_auto {
+                st.osd_default_bright_pct = 0;
+            }
+        }
+        if as_bool(
+            osd.get("wake_on_alert")
+                .map(|s| s.as_str())
+                .unwrap_or("true"),
+            true,
+        ) {
+            flags |= OSD_F_WAKE_ON_ALERT;
+        }
+        st.osd_flags = flags;
+        if let Some(v) = osd
+            .get("auto_day_level")
+            .or_else(|| osd.get("auto_day_pct"))
+        {
+            st.osd_auto_day_pct = v.parse().unwrap_or(st.osd_auto_day_pct).min(100);
+        }
+        if let Some(v) = osd
+            .get("auto_night_level")
+            .or_else(|| osd.get("auto_night_pct"))
+        {
+            st.osd_auto_night_pct = v.parse().unwrap_or(st.osd_auto_night_pct).min(100);
+        }
+        if let Some(v) = osd.get("auto_day_hour") {
+            st.osd_auto_day_hour = v.parse().unwrap_or(st.osd_auto_day_hour).min(23);
+        }
+        if let Some(v) = osd.get("auto_night_hour") {
+            st.osd_auto_night_hour = v.parse().unwrap_or(st.osd_auto_night_hour).min(23);
+        }
+    }
+
     cfg.style = st;
     cfg
 }
@@ -389,7 +469,8 @@ mod tests {
     use super::*;
     use crate::protocol::{
         rgb565, AL_CPU, AL_DISK, AL_MEM, AL_SVC_FAILED, AL_SVC_INACTIVE, AL_TEMP, METER_OFF,
-        METER_ON, SEC_LOAD, SEC_SWAP, SEC_UPTIME,
+        METER_ON, OSD_F_AUTO_BRIGHT, OSD_F_DISMISS_ON_TAP, OSD_F_WAKE_ON_ALERT, SEC_LOAD, SEC_SWAP,
+        SEC_UPTIME,
     };
     use std::io::Write;
     use std::thread;
@@ -533,6 +614,65 @@ service_inactive = true
         let text = "[alerts]\nenabled = false\ncpu_crit = true\n";
         let cfg = parse_status_config_from_str(text);
         assert_eq!(cfg.style.alert_mask, 0);
+    }
+
+    #[test]
+    fn parses_osd_section() {
+        let text = r#"
+[osd]
+default_brightness = 4
+sleep_timeout = 3
+dismiss_alert_on_tap = false
+auto_brightness = true
+auto_day_level = 5
+auto_night_level = 2
+auto_day_hour = 6
+auto_night_hour = 22
+"#;
+        let cfg = parse_status_config_from_str(text);
+        assert_eq!(cfg.style.osd_default_bright_pct, 4);
+        assert_eq!(cfg.style.osd_sleep_timeout_s, 3);
+        assert_eq!(cfg.style.osd_flags, OSD_F_AUTO_BRIGHT | OSD_F_WAKE_ON_ALERT);
+        assert_eq!(cfg.style.osd_auto_day_pct, 5);
+        assert_eq!(cfg.style.osd_auto_night_pct, 2);
+        assert_eq!(cfg.style.osd_auto_day_hour, 6);
+        assert_eq!(cfg.style.osd_auto_night_hour, 22);
+    }
+
+    #[test]
+    fn osd_brightness_auto_keyword() {
+        let cfg = parse_status_config_from_str("[osd]\ndefault_brightness = auto\n");
+        assert_eq!(cfg.style.osd_default_bright_pct, 0);
+        assert_eq!(cfg.style.osd_flags & OSD_F_AUTO_BRIGHT, OSD_F_AUTO_BRIGHT);
+        assert_eq!(
+            cfg.style.osd_flags & OSD_F_WAKE_ON_ALERT,
+            OSD_F_WAKE_ON_ALERT
+        );
+    }
+
+    #[test]
+    fn osd_section_defaults_when_absent() {
+        let cfg = parse_status_config_from_str("");
+        let def = StatusStyle::default();
+        assert_eq!(cfg.style.osd_default_bright_pct, def.osd_default_bright_pct);
+        assert_eq!(cfg.style.osd_sleep_timeout_s, def.osd_sleep_timeout_s);
+        assert_eq!(cfg.style.osd_flags, def.osd_flags);
+    }
+
+    #[test]
+    fn osd_sleep_timeout_never_is_zero() {
+        let cfg = parse_status_config_from_str("[osd]\nsleep_timeout = never\n");
+        assert_eq!(cfg.style.osd_sleep_timeout_s, 0);
+    }
+
+    #[test]
+    fn osd_wake_on_alert_can_disable() {
+        let cfg = parse_status_config_from_str("[osd]\nwake_on_alert = false\n");
+        assert_eq!(cfg.style.osd_flags & OSD_F_WAKE_ON_ALERT, 0);
+        assert_eq!(
+            cfg.style.osd_flags & OSD_F_DISMISS_ON_TAP,
+            OSD_F_DISMISS_ON_TAP
+        );
     }
 
     #[test]
