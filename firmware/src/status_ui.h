@@ -6,4 +6,5 @@
 
 void paintStatusGui(TFT_eSPI *tft, const StatusSnap &s, bool force_full);
 bool statusGuiNeedsRoll(const StatusSnap &s);
+bool statusGuiNeedsAlertTick();
 void statusGuiReset();

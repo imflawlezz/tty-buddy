@@ -1,4 +1,4 @@
-//! Wire protocol: CRC frames and StatusSnap v11.
+//! Wire protocol: CRC frames and StatusSnap v12.
 
 pub const COLS: usize = 53;
 pub const ROWS: usize = 30;
@@ -16,9 +16,9 @@ pub const FLAG_CURSOR_ON: u8 = 0x02;
 pub const FLAG_STATUS: u8 = 0x20;
 pub const FLAG_BYE: u8 = 0x80;
 
-pub const STATUS_VER: u8 = 11;
-pub const STATUS_SNAP_LEN: usize = 4451;
-pub const STYLE_LEN: usize = 45;
+pub const STATUS_VER: u8 = 12;
+pub const STATUS_SNAP_LEN: usize = 4458;
+pub const STYLE_LEN: usize = 52;
 pub const IFACE_COUNT: usize = 16;
 pub const SVC_COUNT: usize = 80;
 pub const SVC_NAME_LEN: usize = 40;
@@ -43,6 +43,13 @@ pub const SEC_LOAD: u8 = 3;
 
 pub const METER_OFF: u8 = 0;
 pub const METER_ON: u8 = 1;
+
+pub const AL_CPU: u8 = 1 << 0;
+pub const AL_MEM: u8 = 1 << 1;
+pub const AL_DISK: u8 = 1 << 2;
+pub const AL_TEMP: u8 = 1 << 3;
+pub const AL_SVC_FAILED: u8 = 1 << 4;
+pub const AL_SVC_INACTIVE: u8 = 1 << 5;
 
 pub fn crc16_ccitt(data: &[u8]) -> u16 {
     let mut crc: u16 = 0xFFFF;
@@ -105,6 +112,13 @@ pub struct StatusStyle {
     pub svc_reloading: u16,
     pub svc_inactive: u16,
     pub svc_maintenance: u16,
+    pub alert_bg_c: u16,
+    pub alert_fg_c: u16,
+    /// 0 = while problem active; N = max seconds if text unchanged.
+    pub alert_hold_sec: u8,
+    /// `AL_*` bits; 0 = off.
+    pub alert_mask: u8,
+    pub alert_temp_c: u8,
 }
 
 impl Default for StatusStyle {
@@ -135,6 +149,11 @@ impl Default for StatusStyle {
             svc_reloading: rgb565(0x33, 0x99, 0xCC),
             svc_inactive: rgb565(0x88, 0x88, 0x88),
             svc_maintenance: rgb565(0x88, 0x88, 0x88),
+            alert_bg_c: rgb565(0x99, 0x00, 0x00),
+            alert_fg_c: 0xFFFF,
+            alert_hold_sec: 0,
+            alert_mask: 0,
+            alert_temp_c: 80,
         }
     }
 }
@@ -178,9 +197,15 @@ impl StatusStyle {
             self.svc_reloading,
             self.svc_inactive,
             self.svc_maintenance,
+            self.alert_bg_c,
+            self.alert_fg_c,
         ] {
             put_u16(&mut b, &mut o, v);
         }
+        b[o] = self.alert_hold_sec;
+        b[o + 1] = self.alert_mask;
+        b[o + 2] = self.alert_temp_c;
+        o += 3;
         debug_assert_eq!(o, STYLE_LEN);
         b
     }
@@ -371,10 +396,10 @@ mod tests {
     fn sizes() {
         assert_eq!(PAYLOAD_LEN, 4770);
         assert_eq!(FRAME_LEN, 4780);
-        assert_eq!(STATUS_SNAP_LEN, 4451);
-        assert_eq!(STYLE_LEN, 45);
-        assert_eq!(StatusStyle::default().pack().len(), 45);
-        assert_eq!(StatusSnap::default().pack().len(), 4451);
+        assert_eq!(STATUS_SNAP_LEN, 4458);
+        assert_eq!(STYLE_LEN, 52);
+        assert_eq!(StatusStyle::default().pack().len(), 52);
+        assert_eq!(StatusSnap::default().pack().len(), 4458);
     }
 
     #[test]

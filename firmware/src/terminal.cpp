@@ -486,9 +486,10 @@ void Terminal::flush() {
   if (!tft_)
     return;
   if (status_ui_) {
-    // Evaluate marquee even when status_dirty_ is set (|| would skip it).
+    // Always tick roll/alert; dirty-only would stall them.
     const bool roll = statusGuiNeedsRoll(status_);
-    if (status_dirty_ || roll) {
+    const bool alert_tick = statusGuiNeedsAlertTick();
+    if (status_dirty_ || roll || alert_tick) {
       paintStatusGui(tft_, status_, status_full_paint_);
       status_full_paint_ = false;
       status_dirty_ = false;
@@ -554,7 +555,7 @@ void Terminal::applyPayload() {
       linked_ = true;
       cur_flags_ = 0;
       if (status_ui_ && memcmp(&status_, &next, sizeof(StatusSnap)) == 0)
-        return; // identical snapshot — no redraw (kills flicker on keepalive)
+        return; // identical keepalive snap
       const bool entering = !status_ui_;
       status_ = next;
       status_ui_ = true;
@@ -571,6 +572,9 @@ void Terminal::applyPayload() {
     statusGuiReset();
     status_full_paint_ = false;
     invalidateCache();
+    // Cell grid is 318px wide; fillScreen clears the 2px gutter (alert bleed).
+    if (tft_)
+      tft_->fillScreen(TFT_BLACK);
   }
 
   const uint8_t *p = payload_;

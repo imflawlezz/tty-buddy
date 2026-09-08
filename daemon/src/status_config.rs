@@ -8,7 +8,8 @@ use std::time::SystemTime;
 use anyhow::Result;
 
 use crate::protocol::{
-    parse_hex_color, StatusStyle, METER_OFF, METER_ON, SEC_LOAD, SEC_NONE, SEC_SWAP, SEC_UPTIME,
+    parse_hex_color, StatusStyle, AL_CPU, AL_DISK, AL_MEM, AL_SVC_FAILED, AL_SVC_INACTIVE,
+    AL_TEMP, METER_OFF, METER_ON, SEC_LOAD, SEC_NONE, SEC_SWAP, SEC_UPTIME,
 };
 
 #[derive(Debug, Clone)]
@@ -286,6 +287,88 @@ pub(crate) fn parse_status_config_from_str(text: &str) -> StatusUiConfig {
         st.svc_maintenance = svc_color("maintenance_color", "maintenance", def.svc_maintenance);
     }
 
+    if let Some(alerts) = sec.get("alerts") {
+        st.alert_bg_c = parse_hex_color(
+            alerts
+                .get("background_color")
+                .map(|s| s.as_str())
+                .unwrap_or(""),
+            st.alert_bg_c,
+        );
+        st.alert_fg_c = parse_hex_color(
+            alerts
+                .get("text_color")
+                .map(|s| s.as_str())
+                .unwrap_or(""),
+            st.alert_fg_c,
+        );
+        if let Some(v) = alerts.get("hold_sec") {
+            let t = v.trim().to_ascii_lowercase();
+            st.alert_hold_sec = if t.is_empty()
+                || t == "0"
+                || t == "until_clear"
+                || t == "until-clear"
+                || t == "clear"
+            {
+                0
+            } else {
+                v.parse().unwrap_or(0)
+            };
+        }
+        if let Some(v) = alerts.get("temp_crit_c") {
+            st.alert_temp_c = v.parse().unwrap_or(80);
+        }
+        let mut mask = 0u8;
+        if as_bool(
+            alerts.get("cpu_crit").map(|s| s.as_str()).unwrap_or("true"),
+            true,
+        ) {
+            mask |= AL_CPU;
+        }
+        if as_bool(
+            alerts.get("mem_crit").map(|s| s.as_str()).unwrap_or("true"),
+            true,
+        ) {
+            mask |= AL_MEM;
+        }
+        if as_bool(
+            alerts.get("disk_crit").map(|s| s.as_str()).unwrap_or("true"),
+            true,
+        ) {
+            mask |= AL_DISK;
+        }
+        if as_bool(
+            alerts.get("temp_crit").map(|s| s.as_str()).unwrap_or("true"),
+            true,
+        ) {
+            mask |= AL_TEMP;
+        }
+        if as_bool(
+            alerts
+                .get("service_failed")
+                .map(|s| s.as_str())
+                .unwrap_or("true"),
+            true,
+        ) {
+            mask |= AL_SVC_FAILED;
+        }
+        if as_bool(
+            alerts
+                .get("service_inactive")
+                .map(|s| s.as_str())
+                .unwrap_or("false"),
+            false,
+        ) {
+            mask |= AL_SVC_INACTIVE;
+        }
+        if let Some(v) = alerts.get("enabled") {
+            if !as_bool(v, true) {
+                mask = 0;
+            }
+        }
+        st.alert_mask = mask;
+    }
+
     cfg.style = st;
     cfg
 }
@@ -301,7 +384,10 @@ pub fn maybe_reload(path: &Path, current: &StatusUiConfig) -> Option<StatusUiCon
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::{rgb565, METER_OFF, METER_ON, SEC_LOAD, SEC_SWAP, SEC_UPTIME};
+    use crate::protocol::{
+        rgb565, AL_CPU, AL_DISK, AL_MEM, AL_SVC_FAILED, AL_SVC_INACTIVE, AL_TEMP, METER_OFF,
+        METER_ON, SEC_LOAD, SEC_SWAP, SEC_UPTIME,
+    };
     use std::io::Write;
     use std::thread;
     use std::time::Duration;
@@ -409,6 +495,41 @@ active = #445566
         assert_eq!(cfg.style.sec_right, SEC_NONE);
         assert!(cfg.services_filter.is_none());
         assert_eq!(cfg.style.svc_active, parse_hex_color("#445566", 0));
+    }
+
+    #[test]
+    fn parses_alerts_section() {
+        let text = r#"
+[alerts]
+enabled = true
+background_color = #AA0000
+text_color = #EEEEEE
+hold_sec = 12
+temp_crit_c = 75
+cpu_crit = true
+mem_crit = false
+disk_crit = true
+temp_crit = true
+service_failed = true
+service_inactive = true
+"#;
+        let cfg = parse_status_config_from_str(text);
+        assert_eq!(cfg.style.alert_bg_c, parse_hex_color("#AA0000", 0));
+        assert_eq!(cfg.style.alert_fg_c, parse_hex_color("#EEEEEE", 0));
+        assert_eq!(cfg.style.alert_hold_sec, 12);
+        assert_eq!(cfg.style.alert_temp_c, 75);
+        assert_eq!(
+            cfg.style.alert_mask,
+            AL_CPU | AL_DISK | AL_TEMP | AL_SVC_FAILED | AL_SVC_INACTIVE
+        );
+        assert_eq!(cfg.style.alert_mask & AL_MEM, 0);
+    }
+
+    #[test]
+    fn alerts_disabled_clears_mask() {
+        let text = "[alerts]\nenabled = false\ncpu_crit = true\n";
+        let cfg = parse_status_config_from_str(text);
+        assert_eq!(cfg.style.alert_mask, 0);
     }
 
     #[test]

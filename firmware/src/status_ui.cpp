@@ -1,6 +1,7 @@
 #include "status_ui.h"
 
 #include <stdio.h>
+#include <string.h>
 
 #define RGB565(r, g, b)                                                        \
   (uint16_t)((((r) & 0xF8) << 8) | (((g) & 0xFC) << 3) | ((b) >> 3))
@@ -37,10 +38,13 @@ static char g_s_if_name[STATUS_IFACE_COUNT][IFACE_NAME_SHOW + 1]{};
 static char g_s_if_ip[STATUS_IFACE_COUNT][IFACE_IP_SHOW + 1]{};
 static char g_s_if_rx[STATUS_IFACE_COUNT][12]{};
 static char g_s_if_tx[STATUS_IFACE_COUNT][12]{};
+static char g_alert_shown[STATUS_ALERT_CHARS + 1]{};
+static char g_alert_latch[STATUS_ALERT_CHARS + 1]{};
+static uint32_t g_alert_until_ms = 0;
+static bool g_alert_on = false;
 static int g_drawn_iface_n = 0;
 
-// Shared marquee offset for overflowing name/IP slots (short strings ignore it).
-// Separate NAME/IP phases left long IPs stuck at offset 0.
+// Shared name/IP marquee offset (split phases stranded long IPs).
 static constexpr uint32_t ROLL_STEP_MS = 500;
 static constexpr uint32_t ROLL_PAUSE_MS = 2500;
 static uint16_t g_roll_off = 0;
@@ -48,6 +52,16 @@ static int8_t g_roll_dir = 1;
 static uint32_t g_roll_step_ms = 0;
 static uint32_t g_roll_pause_until = 0;
 static uint16_t g_roll_painted_off = 0xFFFF;
+
+static constexpr int ALERT_PAD_X = 6;
+static constexpr int ALERT_SHOW_CHARS = (320 - ALERT_PAD_X * 2) / 6;
+static constexpr uint32_t ALERT_ROLL_PAUSE_MS = 1200;
+static uint16_t g_alert_roll_off = 0;
+static int8_t g_alert_roll_dir = 1;
+static uint32_t g_alert_roll_step_ms = 0;
+static uint32_t g_alert_roll_pause_until = 0;
+static uint16_t g_alert_roll_painted = 0xFFFF;
+static char g_alert_win_shown[ALERT_SHOW_CHARS + 1]{};
 
 static constexpr int FONT1_H = 8;
 static constexpr int FONT1_W = 6;
@@ -60,6 +74,15 @@ static void resetRoll() {
   g_roll_step_ms = 0;
   g_roll_pause_until = 0;
   g_roll_painted_off = 0xFFFF;
+}
+
+static void resetAlertRoll() {
+  g_alert_roll_off = 0;
+  g_alert_roll_dir = 1;
+  g_alert_roll_step_ms = 0;
+  g_alert_roll_pause_until = 0;
+  g_alert_roll_painted = 0xFFFF;
+  g_alert_win_shown[0] = 0;
 }
 
 void statusGuiReset() {
@@ -87,6 +110,11 @@ void statusGuiReset() {
   memset(g_s_if_rx, 0, sizeof(g_s_if_rx));
   memset(g_s_if_tx, 0, sizeof(g_s_if_tx));
   g_c_cpu = g_c_mem = g_c_disk = 0;
+  g_alert_shown[0] = 0;
+  g_alert_latch[0] = 0;
+  g_alert_until_ms = 0;
+  g_alert_on = false;
+  resetAlertRoll();
 }
 
 static void applyTheme(const StatusStyle &st) {
@@ -110,7 +138,7 @@ static void drawText1(TFT_eSPI *tft, int x, int y, const char *t, uint16_t col) 
 static void drawBig(TFT_eSPI *tft, int x, int y, const char *t, uint16_t col) {
   tft->setTextDatum(TL_DATUM);
   tft->setTextFont(4);
-  // Transparent text: Font4's opaque bg padding punches neighbouring chrome.
+  // Transparent: Font4's opaque pad would punch the label row above.
   tft->setTextColor(col);
   tft->drawString(t, x, y, 4);
 }
@@ -129,7 +157,7 @@ static void copyCapped(char *dst, size_t dst_n, const char *src, size_t src_n) {
   dst[i] = 0;
 }
 
-/** Substring window; strings shorter than `show` ignore `off`. */
+/** Marquee window; `off` ignored when `src` fits in `show`. */
 static void rollWindow(char *dst, size_t show, const char *src, size_t src_n,
                        uint16_t off) {
   size_t len = cstrLen(src, src_n);
@@ -326,6 +354,69 @@ bool statusGuiNeedsRoll(const StatusSnap &s) {
   return advanceRoll(millis(), s);
 }
 
+static size_t alertLineExtra(const char *text) {
+  char line[STATUS_ALERT_CHARS + 4];
+  snprintf(line, sizeof(line), "! %s", text);
+  const size_t n = strlen(line);
+  if (n <= (size_t)ALERT_SHOW_CHARS)
+    return 0;
+  return n - (size_t)ALERT_SHOW_CHARS;
+}
+
+static uint32_t alertRollStepMs(size_t extra) {
+  if (extra <= 4)
+    return 320;
+  if (extra <= 12)
+    return 180;
+  if (extra <= 28)
+    return 100;
+  return 60;
+}
+
+static bool advanceAlertRoll(uint32_t now, size_t extra) {
+  if (extra == 0) {
+    if (g_alert_roll_off != 0) {
+      g_alert_roll_off = 0;
+      g_alert_roll_dir = 1;
+      return true;
+    }
+    return false;
+  }
+  if ((int32_t)(now - g_alert_roll_pause_until) < 0)
+    return false;
+  const uint32_t step = alertRollStepMs(extra);
+  if (g_alert_roll_step_ms != 0 && (now - g_alert_roll_step_ms) < step)
+    return false;
+  g_alert_roll_step_ms = now;
+
+  int next = (int)g_alert_roll_off + g_alert_roll_dir;
+  if (next <= 0) {
+    g_alert_roll_off = 0;
+    g_alert_roll_dir = 1;
+    g_alert_roll_pause_until = now + ALERT_ROLL_PAUSE_MS;
+    return true;
+  }
+  if ((size_t)next >= extra) {
+    g_alert_roll_off = (uint16_t)extra;
+    g_alert_roll_dir = -1;
+    g_alert_roll_pause_until = now + ALERT_ROLL_PAUSE_MS;
+    return true;
+  }
+  g_alert_roll_off = (uint16_t)next;
+  return true;
+}
+
+bool statusGuiNeedsAlertTick() {
+  const uint32_t now = millis();
+  const size_t extra =
+      (g_alert_on && g_alert_shown[0]) ? alertLineExtra(g_alert_shown) : 0;
+  const bool rolled = advanceAlertRoll(now, extra);
+  if (g_alert_until_ms != 0 && g_alert_latch[0] != 0 &&
+      (int32_t)(now - g_alert_until_ms) >= 0)
+    return true;
+  return rolled;
+}
+
 static bool styleChanged(const StatusSnap &a, const StatusSnap &b) {
   return memcmp(&a.style, &b.style, sizeof(StatusStyle)) != 0;
 }
@@ -353,8 +444,13 @@ static bool paintSlot1(TFT_eSPI *tft, int x, int y, int slot_w, char *cache,
                        bool force) {
   if (!force && strncmp(cache, text, cache_n) == 0)
     return false;
-  clearRect(tft, x, y, slot_w, FONT1_H);
+  const int old_w = cache[0] ? (int)strlen(cache) * FONT1_W : 0;
   drawText1(tft, x, y, text, col);
+  const int new_w = (int)strlen(text) * FONT1_W;
+  if (old_w > new_w)
+    clearRect(tft, x + new_w, y, old_w - new_w, FONT1_H);
+  else if (new_w < slot_w && force)
+    clearRect(tft, x + new_w, y, slot_w - new_w, FONT1_H);
   strncpy(cache, text, cache_n - 1);
   cache[cache_n - 1] = 0;
   return true;
@@ -365,7 +461,13 @@ static bool paintSlotBig(TFT_eSPI *tft, int x, int y, int slot_w, char *cache,
                          uint16_t *col_cache, bool force) {
   if (!force && strncmp(cache, text, cache_n) == 0 && *col_cache == col)
     return false;
-  clearRect(tft, x, y, slot_w, FONT4_H);
+  tft->setTextFont(4);
+  const int old_w = cache[0] ? tft->textWidth(cache, 4) : slot_w;
+  const int new_w = tft->textWidth(text, 4);
+  int cw = old_w > new_w ? old_w : new_w;
+  if (cw > slot_w)
+    cw = slot_w;
+  clearRect(tft, x, y, cw, FONT4_H);
   drawBig(tft, x, y, text, col);
   strncpy(cache, text, cache_n - 1);
   cache[cache_n - 1] = 0;
@@ -419,12 +521,15 @@ static void paintHeader(TFT_eSPI *tft, const StatusSnap &s, bool force) {
   constexpr int time_w = 8 * FONT1_W;
   constexpr int time_x = 316 - time_w;
   if (force || strncmp(g_s_time, tim, sizeof(g_s_time)) != 0) {
-    clearRect(tft, time_x, 4, time_w, FONT1_H);
+    const int old_w = g_s_time[0] ? (int)strlen(g_s_time) * FONT1_W : time_w;
     tft->setTextDatum(TR_DATUM);
     tft->setTextFont(1);
     tft->setTextColor(s.style.time_c ? s.style.time_c : COL_WHITE, g_bg);
     tft->drawString(tim, 316, 4, 1);
     tft->setTextDatum(TL_DATUM);
+    const int new_w = (int)strlen(tim) * FONT1_W;
+    if (old_w > new_w)
+      clearRect(tft, 316 - old_w, 4, old_w - new_w, FONT1_H);
     strncpy(g_s_time, tim, sizeof(g_s_time) - 1);
   }
 
@@ -582,16 +687,33 @@ static void paintNet(TFT_eSPI *tft, const StatusSnap &s, const StatusLayout &L,
   }
 }
 
+static bool servicesNamesEqual(const StatusSnap &a, const StatusSnap &b) {
+  const int n = statusSvcCount(a);
+  if (n != statusSvcCount(b))
+    return false;
+  for (int i = 0; i < n; i++) {
+    if (memcmp(a.services[i].name, b.services[i].name, STATUS_SVC_NAME) != 0)
+      return false;
+  }
+  return true;
+}
+
 static void paintServices(TFT_eSPI *tft, const StatusSnap &s,
-                          const StatusLayout &L, bool force) {
+                          const StatusLayout &L, bool force, int max_y) {
   if (!force && g_have_prev && servicesEqual(s, g_prev))
     return;
 
   const int y0 = L.y_services;
   const int n = statusSvcCount(s);
   const int body_y = y0 + 12;
-  clearRect(tft, 0, body_y - 1, 320, 240 - body_y);
-  drawText1(tft, 6, y0, "SERVICES", g_label);
+  const bool wipe =
+      force || !g_have_prev || !servicesNamesEqual(s, g_prev) ||
+      (g_alert_on ? (240 - STATUS_ALERT_H) : 240) != max_y;
+
+  if (wipe) {
+    clearRect(tft, 0, body_y - 1, 320, max_y - (body_y - 1));
+    drawText1(tft, 6, y0, "SERVICES", g_label);
+  }
 
   int x = 6;
   int y = body_y;
@@ -608,11 +730,78 @@ static void paintServices(TFT_eSPI *tft, const StatusSnap &s,
       x = 6;
       y += row_h;
     }
-    if (y + 8 > 238)
+    if (y + 8 > max_y)
       break;
     drawText1(tft, x, y, name, svcColor(s.style, s.services[i].status));
     x += w + 8;
   }
+}
+
+static void resolveAlertText(const StatusSnap &s, uint32_t now_ms, char *out,
+                             size_t out_n, bool *active) {
+  char live[STATUS_ALERT_CHARS + 1];
+  statusBuildAlert(s, live, sizeof(live));
+  if (!live[0]) {
+    g_alert_latch[0] = 0;
+    g_alert_until_ms = 0;
+    out[0] = 0;
+    *active = false;
+    return;
+  }
+
+  if (strncmp(g_alert_latch, live, STATUS_ALERT_CHARS) != 0) {
+    strncpy(g_alert_latch, live, STATUS_ALERT_CHARS);
+    g_alert_latch[STATUS_ALERT_CHARS] = 0;
+    g_alert_until_ms = s.style.alert_hold_sec > 0
+                           ? now_ms + (uint32_t)s.style.alert_hold_sec * 1000u
+                           : 0;
+    resetAlertRoll();
+  }
+
+  if (s.style.alert_hold_sec > 0 && g_alert_until_ms != 0 &&
+      (int32_t)(now_ms - g_alert_until_ms) >= 0) {
+    out[0] = 0;
+    *active = false;
+    return;
+  }
+
+  strncpy(out, live, out_n - 1);
+  out[out_n - 1] = 0;
+  *active = true;
+}
+
+static void paintAlertStrip(TFT_eSPI *tft, const StatusSnap &s, const char *text,
+                            bool full) {
+  const int y = 240 - STATUS_ALERT_H;
+  const int text_y = y + (STATUS_ALERT_H - FONT1_H) / 2;
+  const uint16_t bg = s.style.alert_bg_c ? s.style.alert_bg_c : 0x9800;
+  const uint16_t fg = s.style.alert_fg_c ? s.style.alert_fg_c : COL_WHITE;
+  char line[STATUS_ALERT_CHARS + 4];
+  snprintf(line, sizeof(line), "! %s", text);
+  char win[ALERT_SHOW_CHARS + 1];
+  rollWindow(win, ALERT_SHOW_CHARS, line, sizeof(line) - 1, g_alert_roll_off);
+  // Pad with spaces so opaque cells clear the previous tail.
+  const size_t wlen = strlen(win);
+  for (size_t i = wlen; i < (size_t)ALERT_SHOW_CHARS; i++)
+    win[i] = ' ';
+  win[ALERT_SHOW_CHARS] = 0;
+
+  if (!full && memcmp(win, g_alert_win_shown, ALERT_SHOW_CHARS) == 0)
+    return;
+
+  if (full) {
+    tft->fillRect(0, y, 320, STATUS_ALERT_H, bg);
+    memset(g_alert_win_shown, 0, sizeof(g_alert_win_shown));
+  }
+
+  tft->setTextFont(1);
+  for (int i = 0; i < ALERT_SHOW_CHARS; i++) {
+    if (!full && win[i] == g_alert_win_shown[i])
+      continue;
+    tft->drawChar(ALERT_PAD_X + i * FONT1_W, text_y, win[i], fg, bg, 1);
+    g_alert_win_shown[i] = win[i];
+  }
+  g_alert_win_shown[ALERT_SHOW_CHARS] = 0;
 }
 
 void paintStatusGui(TFT_eSPI *tft, const StatusSnap &s, bool force_full) {
@@ -624,6 +813,15 @@ void paintStatusGui(TFT_eSPI *tft, const StatusSnap &s, bool force_full) {
   const bool force =
       force_full || !g_chrome || !g_have_prev || styleChanged(s, g_prev) ||
       layoutChanged(L, g_prev_layout);
+
+  char alert[STATUS_ALERT_CHARS + 1];
+  bool alert_active = false;
+  resolveAlertText(s, millis(), alert, sizeof(alert), &alert_active);
+  const bool alert_changed =
+      alert_active != g_alert_on || strcmp(alert, g_alert_shown) != 0;
+  const bool alert_band_changed = alert_active != g_alert_on;
+  const int svc_max_y = alert_active ? (240 - STATUS_ALERT_H) : 240;
+  const bool force_services = force || alert_band_changed;
 
   if (force) {
     tft->fillScreen(g_bg);
@@ -665,7 +863,25 @@ void paintStatusGui(TFT_eSPI *tft, const StatusSnap &s, bool force_full) {
   paintHero(tft, s, L, force);
   paintSecondary(tft, s, L, force);
   paintNet(tft, s, L, force);
-  paintServices(tft, s, L, force);
+
+  // Dismiss strip before services paint into that band.
+  if (!alert_active && g_alert_on) {
+    clearRect(tft, 0, 240 - STATUS_ALERT_H, 320, STATUS_ALERT_H);
+    resetAlertRoll();
+  }
+
+  paintServices(tft, s, L, force_services, svc_max_y);
+
+  if (alert_active) {
+    const bool roll_changed = g_alert_roll_painted != g_alert_roll_off;
+    if (force || alert_changed || roll_changed)
+      paintAlertStrip(tft, s, alert, force || alert_changed);
+    g_alert_roll_painted = g_alert_roll_off;
+  }
+
+  strncpy(g_alert_shown, alert, STATUS_ALERT_CHARS);
+  g_alert_shown[STATUS_ALERT_CHARS] = 0;
+  g_alert_on = alert_active;
 
   g_prev = s;
   g_prev_layout = L;
