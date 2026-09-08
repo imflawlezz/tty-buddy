@@ -1,20 +1,21 @@
 [Unit]
 Description=tty-buddy ESP32 status + console daemon
 Documentation=file:///etc/tty-buddy/daemon.toml
-# System unit: starts at boot without a user login. Daemon waits for USB.
+# Starts at boot; daemon reconnects until the ESP appears on USB.
 After=local-fs.target
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
-User=dih
-Group=dih
+# install.sh replaces __TTY_BUDDY_USER__ with the installing login user.
+User=__TTY_BUDDY_USER__
+Group=__TTY_BUDDY_USER__
 SupplementaryGroups=dialout input
 WorkingDirectory=/etc/tty-buddy
 ExecStart=/usr/local/bin/tty-buddy run --config /etc/tty-buddy/daemon.toml
 Restart=always
 RestartSec=1
 Nice=5
-StartLimitIntervalSec=0
 
 [Install]
 WantedBy=multi-user.target
