@@ -3,31 +3,10 @@
 #include <Arduino.h>
 #include <TFT_eSPI.h>
 
+#include "protocol.h"
 #include "status_ui.h"
 
 // Font 1 (GLCD) 6×8 ASCII + on-device procedural Unicode (box/block/Braille).
-static constexpr int TERM_CELL_W = 6;
-static constexpr int TERM_CELL_H = 8;
-static constexpr int TERM_COLS = 320 / TERM_CELL_W; // 53
-static constexpr int TERM_ROWS = 240 / TERM_CELL_H; // 30
-static constexpr int TERM_CELLS = TERM_COLS * TERM_ROWS;
-// (codepoint_be u16, attr u8) per cell
-static constexpr int TERM_PAYLOAD = TERM_CELLS * 3;
-
-// Frame: AA 55 A5 5A | seq | cx | cy | flags | payload | crc16_be
-// flags: bit0 cursor, bit1 blink, bit5 status GUI snapshot, bit7 bye
-static constexpr uint8_t FRAME_M0 = 0xAA;
-static constexpr uint8_t FRAME_M1 = 0x55;
-static constexpr uint8_t FRAME_M2 = 0xA5;
-static constexpr uint8_t FRAME_M3 = 0x5A;
-static constexpr uint8_t FRAME_ACK = 0x06;
-static constexpr uint8_t FRAME_NAK = 0x15;
-// Device → host: long-press toggles terminal ↔ status (single byte).
-static constexpr uint8_t DEV_MODE_TOGGLE = 0x12;
-static constexpr uint8_t CURSOR_VISIBLE = 0x01;
-static constexpr uint8_t CURSOR_ON = 0x02;
-static constexpr uint8_t FLAG_STATUS = 0x20;
-static constexpr uint8_t FLAG_BYE = 0x80;
 
 class Terminal {
 public:
@@ -102,6 +81,5 @@ private:
   void invalidateCache();
   bool cellInHole(int x, int y) const;
   uint16_t ansiToRgb(uint8_t idx) const;
-  static uint16_t crc16(const uint8_t *data, size_t n, uint16_t seed = 0xFFFF);
   void reply(uint8_t code, uint8_t seq);
 };

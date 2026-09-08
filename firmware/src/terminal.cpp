@@ -297,16 +297,6 @@ static bool glyphArrowEtc(uint16_t cp, uint8_t *out) {
   }
 }
 
-uint16_t Terminal::crc16(const uint8_t *data, size_t n, uint16_t seed) {
-  uint16_t crc = seed;
-  for (size_t i = 0; i < n; i++) {
-    crc ^= (uint16_t)data[i] << 8;
-    for (int b = 0; b < 8; b++)
-      crc = (crc & 0x8000) ? (uint16_t)((crc << 1) ^ 0x1021) : (uint16_t)(crc << 1);
-  }
-  return crc;
-}
-
 void Terminal::begin(TFT_eSPI *display) {
   tft_ = display;
   reset();
@@ -650,8 +640,8 @@ void Terminal::ingest(const uint8_t *data, size_t n) {
     case Rx::CrcLo: {
       crc_expect_ |= b;
       uint8_t hdr[4] = {seq_, rx_cx_, rx_cy_, rx_flags_};
-      uint16_t crc = crc16(hdr, 4);
-      crc = crc16(payload_, TERM_PAYLOAD, crc);
+      uint16_t crc = crc16_ccitt(hdr, 4);
+      crc = crc16_ccitt(payload_, TERM_PAYLOAD, crc);
       if (crc == crc_expect_) {
         applyPayload();
         reply(FRAME_ACK, seq_);
