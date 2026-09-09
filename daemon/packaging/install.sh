@@ -29,8 +29,14 @@ install -m 644 "$HERE/udev/99-tty-buddy.rules" /etc/udev/rules.d/99-tty-buddy.ru
 install -m 755 "$HERE/lib/configure-instance.sh" /usr/lib/tty-buddy/configure-instance.sh
 install -m 755 "$HERE/uninstall.sh" /usr/lib/tty-buddy/uninstall.sh
 
-if [[ ! -f /etc/tty-buddy/status.config ]]; then
-  install -m 644 "$HERE/etc/status.config" /etc/tty-buddy/status.config
+if [[ ! -f /etc/tty-buddy/buddy.config ]]; then
+  if [[ -f /etc/tty-buddy/status.config ]]; then
+    mv /etc/tty-buddy/status.config /etc/tty-buddy/buddy.config
+  elif [[ -f "$HERE/etc/buddy.config" ]]; then
+    install -m 644 "$HERE/etc/buddy.config" /etc/tty-buddy/buddy.config
+  elif [[ -f "$HERE/etc/status.config" ]]; then
+    install -m 644 "$HERE/etc/status.config" /etc/tty-buddy/buddy.config
+  fi
 fi
 if [[ ! -f /etc/tty-buddy/daemon.toml ]]; then
   install -m 644 "$HERE/etc/daemon.toml" /etc/tty-buddy/daemon.toml

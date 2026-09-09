@@ -57,7 +57,7 @@ mkdir -p \
   "$PKG_ROOT/etc/udev/rules.d"
 
 install -m 755 "$BIN" "$PKG_ROOT/usr/bin/tty-buddy"
-install -m 644 "$ROOT/status.config" "$PKG_ROOT/etc/tty-buddy/status.config"
+install -m 644 "$ROOT/buddy.config" "$PKG_ROOT/etc/tty-buddy/buddy.config"
 install -m 644 "$ROOT/packaging/daemon.toml.example" "$PKG_ROOT/etc/tty-buddy/daemon.toml"
 install -m 644 "$ROOT/packaging/tty-buddy@.service" "$PKG_ROOT/usr/lib/systemd/system/tty-buddy@.service"
 install -m 644 "$ROOT/udev/99-tty-buddy.rules" "$PKG_ROOT/etc/udev/rules.d/99-tty-buddy.rules"
@@ -82,7 +82,7 @@ EOF
 
 cat >"$PKG_ROOT/DEBIAN/conffiles" <<EOF
 /etc/tty-buddy/daemon.toml
-/etc/tty-buddy/status.config
+/etc/tty-buddy/buddy.config
 EOF
 
 cat >"$PKG_ROOT/DEBIAN/postinst" <<'EOF'

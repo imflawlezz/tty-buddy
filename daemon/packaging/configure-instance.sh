@@ -20,6 +20,30 @@ fi
 chown root:root /etc/tty-buddy
 chmod 755 /etc/tty-buddy
 
+if [[ -f /etc/tty-buddy/status.config && ! -f /etc/tty-buddy/buddy.config ]]; then
+  mv /etc/tty-buddy/status.config /etc/tty-buddy/buddy.config
+fi
+
+if [[ -f /etc/tty-buddy/buddy.config ]]; then
+  chown "$USER_NAME:$USER_NAME" /etc/tty-buddy/buddy.config
+  chmod 644 /etc/tty-buddy/buddy.config
+  if ! grep -qE '^\[behavior\]' /etc/tty-buddy/buddy.config 2>/dev/null; then
+    tmp="$(mktemp)"
+    {
+      cat <<'EOF'
+[behavior]
+startup_mode = status
+keyboard_opens_terminal = true
+fps = 10
+
+EOF
+      cat /etc/tty-buddy/buddy.config
+    } >"$tmp"
+    mv "$tmp" /etc/tty-buddy/buddy.config
+    chown "$USER_NAME:$USER_NAME" /etc/tty-buddy/buddy.config
+  fi
+fi
+
 if [[ -f /etc/tty-buddy/status.config ]]; then
   chown "$USER_NAME:$USER_NAME" /etc/tty-buddy/status.config
   chmod 644 /etc/tty-buddy/status.config

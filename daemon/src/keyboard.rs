@@ -8,16 +8,16 @@ use anyhow::Result;
 
 #[derive(Default)]
 pub struct Keyboard {
-    devices: Vec<Grabbed>,
+    devices: Vec<Opened>,
     shift: bool,
     ctrl: bool,
     alt: bool,
     enabled: bool,
-    /// Exclusive grab while console mode is active.
-    want_grab: bool,
+    listening: bool,
+    exclusive: bool,
 }
 
-struct Grabbed {
+struct Opened {
     path: PathBuf,
     name: String,
     file: File,
@@ -36,22 +36,39 @@ impl Keyboard {
             ctrl: false,
             alt: false,
             enabled: true,
-            want_grab: false,
+            listening: false,
+            exclusive: false,
         })
     }
 
-    /// Enter console grab mode and attach current keyboards.
     pub fn grab(&mut self) -> Result<()> {
         if !self.enabled {
             return Ok(());
         }
-        self.want_grab = true;
+        self.listening = true;
+        self.exclusive = true;
         self.maintain()
     }
 
-    /// Leave console grab mode and release all devices.
+    /// Open without EVIOCGRAB (status-mode activity watch).
+    pub fn watch(&mut self) -> Result<()> {
+        if !self.enabled {
+            return Ok(());
+        }
+        self.listening = true;
+        self.exclusive = false;
+        for g in &mut self.devices {
+            if g.grabbed {
+                let _ = evdev_ungrab(g.file.as_raw_fd());
+                g.grabbed = false;
+            }
+        }
+        self.maintain()
+    }
+
     pub fn ungrab(&mut self) {
-        self.want_grab = false;
+        self.listening = false;
+        self.exclusive = false;
         for g in &mut self.devices {
             if g.grabbed {
                 let _ = evdev_ungrab(g.file.as_raw_fd());
@@ -64,9 +81,8 @@ impl Keyboard {
         self.alt = false;
     }
 
-    /// Attach new keyboards and drop removed ones. Intended ~1 Hz while grabbed.
     pub fn maintain(&mut self) -> Result<()> {
-        if !self.enabled || !self.want_grab {
+        if !self.enabled || !self.listening {
             return Ok(());
         }
 
@@ -88,23 +104,29 @@ impl Keyboard {
             match File::options().read(true).write(true).open(&path) {
                 Ok(file) => {
                     let fd = file.as_raw_fd();
-                    match evdev_grab(fd) {
-                        Ok(()) => {
-                            eprintln!("keyboard: grabbed {} ({})", path.display(), name.trim());
-                            self.devices.push(Grabbed {
-                                path,
-                                name,
-                                file,
-                                grabbed: true,
-                            });
+                    set_nonblock(fd);
+                    let mut grabbed = false;
+                    if self.exclusive {
+                        match evdev_grab(fd) {
+                            Ok(()) => {
+                                grabbed = true;
+                                eprintln!("keyboard: grabbed {} ({})", path.display(), name.trim());
+                            }
+                            Err(e) => {
+                                eprintln!("keyboard: grab {} failed: {e}", path.display());
+                            }
                         }
-                        Err(e) => {
-                            eprintln!("keyboard: grab {} failed: {e}", path.display());
-                        }
+                    } else {
+                        eprintln!("keyboard: watch {} ({})", path.display(), name.trim());
                     }
+                    self.devices.push(Opened {
+                        path,
+                        name,
+                        file,
+                        grabbed,
+                    });
                 }
                 Err(e) => {
-                    // Node often appears before permissions settle; next maintain retries.
                     if e.kind() != std::io::ErrorKind::PermissionDenied {
                         eprintln!("keyboard: open {} failed: {e}", path.display());
                     }
@@ -113,9 +135,14 @@ impl Keyboard {
         }
 
         for g in &mut self.devices {
-            if !g.grabbed && evdev_grab(g.file.as_raw_fd()).is_ok() {
-                g.grabbed = true;
-                eprintln!("keyboard: re-grabbed {} ({})", g.path.display(), g.name);
+            if self.exclusive && !g.grabbed {
+                if evdev_grab(g.file.as_raw_fd()).is_ok() {
+                    g.grabbed = true;
+                    eprintln!("keyboard: re-grabbed {} ({})", g.path.display(), g.name);
+                }
+            } else if !self.exclusive && g.grabbed {
+                let _ = evdev_ungrab(g.file.as_raw_fd());
+                g.grabbed = false;
             }
         }
 
@@ -126,17 +153,18 @@ impl Keyboard {
         self.devices.iter().filter(|g| g.grabbed).count()
     }
 
+    pub fn device_count(&self) -> usize {
+        self.devices.len()
+    }
+
     pub fn poll(&mut self) -> Vec<Vec<u8>> {
         let mut out = Vec::new();
-        if !self.enabled || !self.want_grab {
+        if !self.enabled || !self.listening {
             return out;
         }
 
         let mut dead: Vec<usize> = Vec::new();
         for (idx, g) in self.devices.iter().enumerate() {
-            if !g.grabbed {
-                continue;
-            }
             loop {
                 let mut buf = [0u8; 24];
                 let n = unsafe {
@@ -243,18 +271,22 @@ fn eviocgrab() -> libc::c_ulong {
     0x4004_4590
 }
 
-fn evdev_grab(fd: i32) -> Result<()> {
-    let grab: i32 = 1;
-    let rc = unsafe { libc::ioctl(fd, eviocgrab(), &grab as *const i32 as *const _) };
-    if rc < 0 {
-        anyhow::bail!("{}", std::io::Error::last_os_error());
-    }
+fn set_nonblock(fd: i32) {
     let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
     if flags >= 0 {
         unsafe {
             libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
         }
     }
+}
+
+fn evdev_grab(fd: i32) -> Result<()> {
+    let grab: i32 = 1;
+    let rc = unsafe { libc::ioctl(fd, eviocgrab(), &grab as *const i32 as *const _) };
+    if rc < 0 {
+        anyhow::bail!("{}", std::io::Error::last_os_error());
+    }
+    set_nonblock(fd);
     Ok(())
 }
 

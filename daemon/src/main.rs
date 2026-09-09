@@ -9,7 +9,7 @@ use tty_buddy::bridge;
 use tty_buddy::discover::{list_serial_devices, resolve_device};
 use tty_buddy::metrics::MetricsCollector;
 use tty_buddy::protocol::STATUS_SNAP_LEN;
-use tty_buddy::settings::{settings_path, DaemonSettings};
+use tty_buddy::settings::{resolve_buddy_config_path, settings_path, DaemonSettings};
 use tty_buddy::status_config::load_status_config;
 
 #[derive(Parser, Debug)]
@@ -32,8 +32,8 @@ enum Commands {
         config: Option<PathBuf>,
         #[arg(short, long)]
         port: Option<String>,
-        #[arg(long)]
-        status_config: Option<PathBuf>,
+        #[arg(long, visible_alias = "status-config")]
+        buddy_config: Option<PathBuf>,
         #[arg(long)]
         fps: Option<f32>,
         /// Force start in status mode
@@ -47,8 +47,8 @@ enum Commands {
     Devices,
     /// Sample live host metrics (no serial)
     Probe {
-        #[arg(long)]
-        status_config: Option<PathBuf>,
+        #[arg(long, visible_alias = "status-config")]
+        buddy_config: Option<PathBuf>,
     },
 }
 
@@ -61,16 +61,16 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
-        Commands::Probe { status_config } => cmd_probe(status_config),
+        Commands::Probe { buddy_config } => cmd_probe(buddy_config),
         Commands::Setup { config } => cmd_setup(config),
         Commands::Run {
             config,
             port,
-            status_config,
+            buddy_config,
             fps,
             status,
             terminal,
-        } => cmd_run(config, port, status_config, fps, status, terminal),
+        } => cmd_run(config, port, buddy_config, fps, status, terminal),
     }
 }
 
@@ -119,15 +119,14 @@ fn cmd_setup(config: Option<PathBuf>) -> Result<()> {
     settings.pid = chosen.pid;
     settings.serial = chosen.serial.clone();
     settings.shell_user = Some(user.clone());
-    settings.start_in_status = true;
-    if settings.status_config.is_none() {
-        settings.status_config = Some(PathBuf::from("/etc/tty-buddy/status.config"));
+    if settings.buddy_config.is_none() {
+        settings.buddy_config = Some(PathBuf::from("/etc/tty-buddy/buddy.config"));
     }
     settings.save(&path)?;
     println!("\nSaved {}", path.display());
     println!("  device = {}", chosen.path);
     println!("  user   = {user}");
-    println!("Enable:  sudo systemctl enable --now tty-buddy");
+    println!("Enable:  sudo systemctl enable --now tty-buddy@$USER");
     Ok(())
 }
 
@@ -138,7 +137,7 @@ fn whoami() -> String {
 fn cmd_run(
     config: Option<PathBuf>,
     port: Option<String>,
-    status_config: Option<PathBuf>,
+    buddy_config: Option<PathBuf>,
     fps: Option<f32>,
     status: bool,
     terminal: bool,
@@ -148,43 +147,25 @@ fn cmd_run(
     if let Some(p) = port {
         settings.device_path = Some(p);
     }
-    if let Some(sc) = status_config {
-        settings.status_config = Some(sc);
+    if let Some(sc) = buddy_config {
+        settings.buddy_config = Some(sc);
     }
-    if let Some(f) = fps {
-        settings.fps = f;
-    }
+
+    let buddy_path = resolve_buddy_config_path(settings.buddy_config.as_deref());
+
+    let mut force_status = None;
     if status {
-        settings.start_in_status = true;
+        force_status = Some(true);
     }
     if terminal {
-        settings.start_in_status = false;
+        force_status = Some(false);
     }
 
-    let status_path = settings
-        .status_config
-        .clone()
-        .unwrap_or_else(|| PathBuf::from("/etc/tty-buddy/status.config"));
-
-    let status_path = if status_path.exists() {
-        status_path
-    } else if PathBuf::from("status.config").exists() {
-        PathBuf::from("status.config")
-    } else {
-        status_path
-    };
-
-    bridge::run_forever(&settings, &status_path, settings.fps)
+    bridge::run_forever(&settings, &buddy_path, fps, force_status)
 }
 
-fn cmd_probe(status_config: Option<PathBuf>) -> Result<()> {
-    let path = status_config.unwrap_or_else(|| {
-        if PathBuf::from("status.config").exists() {
-            PathBuf::from("status.config")
-        } else {
-            PathBuf::from("/etc/tty-buddy/status.config")
-        }
-    });
+fn cmd_probe(buddy_config: Option<PathBuf>) -> Result<()> {
+    let path = resolve_buddy_config_path(buddy_config.as_deref());
     let cfg = load_status_config(&path)?;
     let mut m = MetricsCollector::new();
     let _ = m.sample(&cfg)?;

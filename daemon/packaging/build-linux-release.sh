@@ -18,7 +18,7 @@ mkdir -p "$STAGE/bin" "$STAGE/etc" "$STAGE/systemd" "$STAGE/udev" "$STAGE/lib"
 
 BIN="$("$HERE/build-binary.sh" "$DEB_ARCH")"
 cp "$BIN" "$STAGE/bin/tty-buddy"
-cp "$ROOT/status.config" "$STAGE/etc/"
+cp "$ROOT/buddy.config" "$STAGE/etc/"
 cp "$ROOT/packaging/daemon.toml.example" "$STAGE/etc/daemon.toml"
 cp "$ROOT/packaging/tty-buddy@.service" "$STAGE/systemd/"
 cp "$ROOT/udev/99-tty-buddy.rules" "$STAGE/udev/"

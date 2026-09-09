@@ -20,11 +20,17 @@ use crate::protocol::{
 use crate::serial_io::{BuddySerial, DeviceEvent};
 use crate::settings::DaemonSettings;
 use crate::status_config::{
-    apply_osd_levels, load_status_config, maybe_reload, write_osd_levels, StatusUiConfig,
+    apply_daemon_behavior_fallback, apply_osd_levels, load_status_config, maybe_reload,
+    write_osd_levels, StatusUiConfig,
 };
 use crate::terminal::PtySession;
 
-pub fn run_forever(settings: &DaemonSettings, status_config: &Path, fps: f32) -> Result<()> {
+pub fn run_forever(
+    settings: &DaemonSettings,
+    buddy_config: &Path,
+    fps_override: Option<f32>,
+    force_status: Option<bool>,
+) -> Result<()> {
     let running = Arc::new(AtomicBool::new(true));
     {
         let r = running.clone();
@@ -35,7 +41,9 @@ pub fn run_forever(settings: &DaemonSettings, status_config: &Path, fps: f32) ->
     while running.load(Ordering::SeqCst) {
         if let Ok(dev) = resolve_device(settings) {
             eprintln!("device online: {dev}");
-            if let Err(e) = run_session(&dev, settings, status_config, fps, &running) {
+            if let Err(e) =
+                run_session(&dev, settings, buddy_config, fps_override, force_status, &running)
+            {
                 eprintln!("session ended: {e:#}");
             }
             eprintln!("waiting for device…");
@@ -75,8 +83,12 @@ fn enter_terminal(
     Ok(())
 }
 
-fn enter_status(keyboard: &mut Keyboard) {
-    keyboard.ungrab();
+fn enter_status(keyboard: &mut Keyboard, watch_for_terminal: bool) {
+    if watch_for_terminal {
+        let _ = keyboard.watch();
+    } else {
+        keyboard.ungrab();
+    }
 }
 
 fn push_style(serial: &mut BuddySerial, cfg: &StatusUiConfig, metrics: &mut MetricsCollector) {
@@ -119,20 +131,28 @@ fn apply_device_osd(path: &Path, cfg: &mut StatusUiConfig, bright: Option<u8>, s
 pub fn run_session(
     device: &str,
     settings: &DaemonSettings,
-    status_config: &Path,
-    fps: f32,
+    buddy_config: &Path,
+    fps_override: Option<f32>,
+    force_status: Option<bool>,
     running: &AtomicBool,
 ) -> Result<()> {
     let mut serial = BuddySerial::open(device)?;
-    let mut cfg = load_status_config(status_config)
-        .with_context(|| format!("load {}", status_config.display()))?;
+    let mut cfg = load_status_config(buddy_config)
+        .with_context(|| format!("load {}", buddy_config.display()))?;
+    apply_daemon_behavior_fallback(&mut cfg, settings);
+    if let Some(f) = fps_override {
+        cfg.fps = f.max(1.0);
+    }
+    if let Some(s) = force_status {
+        cfg.startup_status = s;
+    }
     let mut metrics = MetricsCollector::new();
     let _ = metrics.sample(&cfg)?;
     std::thread::sleep(Duration::from_millis(200));
     push_style(&mut serial, &cfg, &mut metrics);
 
-    let mut status_mode = settings.start_in_status;
-    let frame_dt = Duration::from_secs_f32(1.0 / fps.max(1.0));
+    let mut status_mode = cfg.startup_status;
+    let mut frame_dt = Duration::from_secs_f32(1.0 / cfg.fps.max(1.0));
     let status_dt = Duration::from_secs(1);
     let mut last_term = Instant::now() - frame_dt;
     let mut last_status = Instant::now() - status_dt;
@@ -154,6 +174,8 @@ pub fn run_session(
 
     if !status_mode {
         enter_terminal(&mut pty, &mut keyboard, settings)?;
+    } else {
+        enter_status(&mut keyboard, cfg.keyboard_opens_terminal);
     }
 
     eprintln!(
@@ -166,10 +188,19 @@ pub fn run_session(
             anyhow::bail!("device unplugged");
         }
 
-        if let Some(new_cfg) = maybe_reload(status_config, &cfg) {
+        if let Some(mut new_cfg) = maybe_reload(buddy_config, &cfg) {
+            apply_daemon_behavior_fallback(&mut new_cfg, settings);
+            if let Some(f) = fps_override {
+                new_cfg.fps = f.max(1.0);
+            }
+            let kb_changed = new_cfg.keyboard_opens_terminal != cfg.keyboard_opens_terminal;
             cfg = new_cfg;
-            eprintln!("reloaded {}", status_config.display());
+            frame_dt = Duration::from_secs_f32(1.0 / cfg.fps.max(1.0));
+            eprintln!("reloaded {}", buddy_config.display());
             push_style(&mut serial, &cfg, &mut metrics);
+            if status_mode && kb_changed {
+                enter_status(&mut keyboard, cfg.keyboard_opens_terminal);
+            }
         }
 
         for ev in serial.poll_events() {
@@ -178,16 +209,16 @@ pub fn run_session(
                     status_mode = !status_mode;
                     eprintln!("mode → {}", if status_mode { "status" } else { "terminal" });
                     if status_mode {
-                        enter_status(&mut keyboard);
+                        enter_status(&mut keyboard, cfg.keyboard_opens_terminal);
                     } else {
                         enter_terminal(&mut pty, &mut keyboard, settings)?;
                     }
                 }
                 DeviceEvent::Brightness(v) => {
-                    apply_device_osd(status_config, &mut cfg, Some(v), None);
+                    apply_device_osd(buddy_config, &mut cfg, Some(v), None);
                 }
                 DeviceEvent::Sleep(v) => {
-                    apply_device_osd(status_config, &mut cfg, None, Some(v));
+                    apply_device_osd(buddy_config, &mut cfg, None, Some(v));
                 }
             }
         }
@@ -213,7 +244,51 @@ pub fn run_session(
         }
 
         let send_result = if status_mode {
-            if last_status.elapsed() >= status_dt {
+            if cfg.keyboard_opens_terminal {
+                let scan_due = last_kb_scan.elapsed() >= Duration::from_millis(750)
+                    || keyboard.device_count() == 0;
+                if scan_due {
+                    let _ = keyboard.maintain();
+                    last_kb_scan = Instant::now();
+                }
+            }
+
+            let pending = if cfg.keyboard_opens_terminal {
+                keyboard.poll()
+            } else {
+                Vec::new()
+            };
+            if !pending.is_empty() {
+                status_mode = false;
+                eprintln!("mode → terminal (keyboard)");
+                enter_terminal(&mut pty, &mut keyboard, settings)?;
+                ensure_pty(&mut pty, settings)?;
+                let session = pty.as_mut().unwrap();
+                let app_cursor = session.application_cursor();
+                for key in pending {
+                    let bytes = if app_cursor {
+                        map_app_cursor(&key).unwrap_or(key)
+                    } else {
+                        key
+                    };
+                    let _ = session.write_input(&bytes);
+                }
+                let frame = session.frame();
+                let guard = frame.lock().unwrap();
+                let payload = guard.payload;
+                let (cx, cy) = guard.cursor;
+                let hide = guard.hide_cursor;
+                drop(guard);
+                let mut flags = FLAG_ACTIVITY;
+                if !hide {
+                    flags |= FLAG_CURSOR_VISIBLE;
+                    if cursor_on {
+                        flags |= FLAG_CURSOR_ON;
+                    }
+                }
+                last_term = Instant::now();
+                serial.send_frame(cx, cy, flags, &payload)
+            } else if last_status.elapsed() >= status_dt {
                 let snap = metrics.sample(&cfg)?;
                 let payload = snap.to_payload();
                 last_status = Instant::now();

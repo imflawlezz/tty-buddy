@@ -149,7 +149,7 @@ fn hostname() -> String {
 }
 
 pub(crate) fn strftime_chrono(fmt: &str, t: &chrono::DateTime<Local>) -> String {
-    // status.config uses C/Python-style % tokens; map the common subset to chrono.
+    // buddy.config date formats use C/Python-style % tokens; map the common subset to chrono.
     let mut out = String::new();
     let mut chars = fmt.chars().peekable();
     while let Some(c) = chars.next() {

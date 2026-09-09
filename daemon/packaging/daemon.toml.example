@@ -1,20 +1,13 @@
-# tty-buddy daemon settings (/etc/tty-buddy/daemon.toml)
+# tty-buddy host settings (/etc/tty-buddy/daemon.toml)
 #
-# Defaults work for a single board. udev creates /dev/tty-buddy; otherwise the
-# daemon matches Espressif USB-JTAG (303a:1001). Use `tty-buddy setup` only to
-# pin one board when several are attached.
-
+# Device bind + shell_user. Panel UX: buddy.config.
+# udev → /dev/tty-buddy; else match Espressif USB-JTAG (303a:1001).
+# `tty-buddy setup` only when pinning one of several boards.
 device_path = "/dev/tty-buddy"
 vid = 12346   # 0x303A Espressif
 pid = 4097    # 0x1001 USB JTAG/serial
 # serial = "aa:bb:cc:dd:ee:ff"
 
-status_config = "/etc/tty-buddy/status.config"
+buddy_config = "/etc/tty-buddy/buddy.config"
 
-# Filled by package install / configure-instance (the service user).
 shell_user = "REPLACE_ME"
-
-# true = status GUI first; OSD long-press toggles console
-start_in_status = true
-
-fps = 10.0

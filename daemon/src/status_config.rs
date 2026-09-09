@@ -1,4 +1,4 @@
-//! Parse daemon/status.config (INI) into StatusStyle + layout hints.
+//! Parse buddy.config (INI; legacy name status.config) into UI + behavior.
 
 use std::collections::HashMap;
 use std::fs;
@@ -12,6 +12,7 @@ use crate::protocol::{
     METER_OFF, METER_ON, OSD_F_AUTO_BRIGHT, OSD_F_DISMISS_ON_TAP, OSD_F_WAKE_ON_ALERT, SEC_LOAD,
     SEC_NONE, SEC_SWAP, SEC_UPTIME,
 };
+use crate::settings::DaemonSettings;
 
 #[derive(Debug, Clone)]
 pub struct StatusUiConfig {
@@ -22,6 +23,11 @@ pub struct StatusUiConfig {
     pub interfaces: Vec<(String, IpMode)>,
     pub services_filter: Option<Vec<String>>,
     pub mtime: Option<SystemTime>,
+    pub startup_status: bool,
+    pub keyboard_opens_terminal: bool,
+    pub fps: f32,
+    /// Set when `[behavior]` is present; otherwise daemon.toml legacy keys apply.
+    pub behavior_from_file: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,6 +48,10 @@ impl Default for StatusUiConfig {
             interfaces: Vec::new(),
             services_filter: None,
             mtime: None,
+            startup_status: true,
+            keyboard_opens_terminal: true,
+            fps: 10.0,
+            behavior_from_file: false,
         }
     }
 }
@@ -125,6 +135,25 @@ pub(crate) fn parse_status_config_from_str(text: &str) -> StatusUiConfig {
     let (sec, iface_order) = parse_ini(text);
     let mut cfg = StatusUiConfig::default();
     let mut st = StatusStyle::default();
+
+    if let Some(b) = sec.get("behavior") {
+        cfg.behavior_from_file = true;
+        if let Some(v) = b.get("startup_mode").or_else(|| b.get("start_in_status")) {
+            let t = v.trim().to_ascii_lowercase();
+            cfg.startup_status = match t.as_str() {
+                "terminal" | "console" | "tty" | "false" | "0" | "no" | "off" => false,
+                _ => true,
+            };
+        }
+        if let Some(v) = b.get("keyboard_opens_terminal") {
+            cfg.keyboard_opens_terminal = as_bool(v, true);
+        }
+        if let Some(v) = b.get("fps") {
+            if let Ok(n) = v.parse::<f32>() {
+                cfg.fps = n.max(1.0);
+            }
+        }
+    }
 
     if let Some(g) = sec.get("globals") {
         if let Some(v) = g.get("label_color") {
@@ -373,7 +402,8 @@ pub(crate) fn parse_status_config_from_str(text: &str) -> StatusUiConfig {
         st.alert_mask = mask;
     }
 
-    if let Some(osd) = sec.get("osd") {
+    let display = sec.get("display").or_else(|| sec.get("osd"));
+    if let Some(osd) = display {
         let bright_auto = osd
             .get("brightness")
             .or_else(|| osd.get("default_brightness"))
@@ -455,6 +485,16 @@ pub(crate) fn parse_status_config_from_str(text: &str) -> StatusUiConfig {
     cfg
 }
 
+/// Copy daemon.toml behavior keys when buddy.config has no `[behavior]`.
+pub fn apply_daemon_behavior_fallback(cfg: &mut StatusUiConfig, settings: &DaemonSettings) {
+    if cfg.behavior_from_file {
+        return;
+    }
+    cfg.startup_status = settings.start_in_status;
+    cfg.keyboard_opens_terminal = settings.keyboard_opens_terminal;
+    cfg.fps = settings.fps.max(1.0);
+}
+
 pub fn maybe_reload(path: &Path, current: &StatusUiConfig) -> Option<StatusUiConfig> {
     let mtime = fs::metadata(path).ok().and_then(|m| m.modified().ok())?;
     if current.mtime == Some(mtime) {
@@ -463,8 +503,7 @@ pub fn maybe_reload(path: &Path, current: &StatusUiConfig) -> Option<StatusUiCon
     load_status_config(path).ok()
 }
 
-/// Persist OSD brightness/sleep levels into `[osd]` (creates section if missing).
-/// `bright`: 0 = auto, 1..=6 = step. `sleep`: 0 = never, 1..=6 = level.
+/// Write brightness/sleep into `[display]` (0 = auto/never). Renames legacy `[osd]`.
 pub fn write_osd_levels(path: &Path, bright: u8, sleep: u8) -> Result<()> {
     let bright = bright.min(6);
     let sleep = sleep.min(6);
@@ -486,15 +525,15 @@ pub fn write_osd_levels(path: &Path, bright: u8, sleep: u8) -> Result<()> {
     };
 
     let mut out = String::with_capacity(original.len() + 64);
-    let mut in_osd = false;
-    let mut saw_osd = false;
+    let mut in_display = false;
+    let mut saw_display = false;
     let mut wrote_bright = false;
     let mut wrote_sleep = false;
 
     for line in original.lines() {
         let trimmed = line.trim();
         if trimmed.starts_with('[') && trimmed.ends_with(']') {
-            if in_osd {
+            if in_display {
                 if !wrote_bright {
                     out.push_str(&format!("brightness = {bright_val}\n"));
                     wrote_bright = true;
@@ -504,15 +543,19 @@ pub fn write_osd_levels(path: &Path, bright: u8, sleep: u8) -> Result<()> {
                     wrote_sleep = true;
                 }
             }
-            in_osd = trimmed.eq_ignore_ascii_case("[osd]");
-            if in_osd {
-                saw_osd = true;
+            let is_display = trimmed.eq_ignore_ascii_case("[display]")
+                || trimmed.eq_ignore_ascii_case("[osd]");
+            in_display = is_display;
+            if in_display {
+                saw_display = true;
+                out.push_str("[display]\n");
+            } else {
+                out.push_str(line);
+                out.push('\n');
             }
-            out.push_str(line);
-            out.push('\n');
             continue;
         }
-        if in_osd {
+        if in_display {
             let key = trimmed.split('=').next().map(str::trim).unwrap_or("");
             if key.eq_ignore_ascii_case("brightness")
                 || key.eq_ignore_ascii_case("default_brightness")
@@ -540,19 +583,19 @@ pub fn write_osd_levels(path: &Path, bright: u8, sleep: u8) -> Result<()> {
         out.push_str(line);
         out.push('\n');
     }
-    if in_osd {
+    if in_display {
         if !wrote_bright {
             out.push_str(&format!("brightness = {bright_val}\n"));
         }
         if !wrote_sleep {
             out.push_str(&format!("sleep_timeout = {sleep_val}\n"));
         }
-    } else if !saw_osd {
+    } else if !saw_display {
         if !out.is_empty() && !out.ends_with('\n') {
             out.push('\n');
         }
         out.push_str(&format!(
-            "\n[osd]\nbrightness = {bright_val}\nsleep_timeout = {sleep_val}\n"
+            "\n[display]\nbrightness = {bright_val}\nsleep_timeout = {sleep_val}\n"
         ));
     }
 
@@ -563,7 +606,6 @@ pub fn write_osd_levels(path: &Path, bright: u8, sleep: u8) -> Result<()> {
     Ok(())
 }
 
-/// Same encoding as `write_osd_levels`, in memory only.
 pub fn apply_osd_levels(cfg: &mut StatusUiConfig, bright: u8, sleep: u8) {
     let bright = bright.min(6);
     let sleep = sleep.min(6);
@@ -590,12 +632,16 @@ mod tests {
 
     #[test]
     fn missing_file_returns_defaults() {
-        let cfg = load_status_config(Path::new("/no/such/status.config")).unwrap();
+        let cfg = load_status_config(Path::new("/no/such/buddy.config")).unwrap();
         assert_eq!(cfg.date_format, "%d-%m-%Y");
         assert_eq!(cfg.disk_mount, "/");
         assert!(cfg.interfaces.is_empty());
         assert!(cfg.services_filter.is_none());
         assert_eq!(cfg.style.meter_mode, METER_ON);
+        assert!(cfg.startup_status);
+        assert!(cfg.keyboard_opens_terminal);
+        assert_eq!(cfg.fps, 10.0);
+        assert!(!cfg.behavior_from_file);
     }
 
     #[test]
@@ -729,10 +775,10 @@ service_inactive = true
     }
 
     #[test]
-    fn parses_osd_section() {
+    fn parses_display_section() {
         let text = r#"
-[osd]
-default_brightness = 4
+[display]
+brightness = 4
 sleep_timeout = 3
 dismiss_alert_on_tap = false
 auto_brightness = true
@@ -752,8 +798,27 @@ auto_night_hour = 22
     }
 
     #[test]
+    fn parses_legacy_osd_section_name() {
+        let text = r#"
+[osd]
+default_brightness = 4
+sleep_timeout = 3
+dismiss_alert_on_tap = false
+auto_brightness = true
+auto_day_level = 5
+auto_night_level = 2
+auto_day_hour = 6
+auto_night_hour = 22
+"#;
+        let cfg = parse_status_config_from_str(text);
+        assert_eq!(cfg.style.osd_default_bright_pct, 4);
+        assert_eq!(cfg.style.osd_sleep_timeout_s, 3);
+        assert_eq!(cfg.style.osd_flags, OSD_F_AUTO_BRIGHT | OSD_F_WAKE_ON_ALERT);
+    }
+
+    #[test]
     fn osd_brightness_auto_keyword() {
-        let cfg = parse_status_config_from_str("[osd]\ndefault_brightness = auto\n");
+        let cfg = parse_status_config_from_str("[display]\nbrightness = auto\n");
         assert_eq!(cfg.style.osd_default_bright_pct, 0);
         assert_eq!(cfg.style.osd_flags & OSD_F_AUTO_BRIGHT, OSD_F_AUTO_BRIGHT);
         assert_eq!(
@@ -773,13 +838,13 @@ auto_night_hour = 22
 
     #[test]
     fn osd_sleep_timeout_never_is_zero() {
-        let cfg = parse_status_config_from_str("[osd]\nsleep_timeout = never\n");
+        let cfg = parse_status_config_from_str("[display]\nsleep_timeout = never\n");
         assert_eq!(cfg.style.osd_sleep_timeout_s, 0);
     }
 
     #[test]
     fn osd_wake_on_alert_can_disable() {
-        let cfg = parse_status_config_from_str("[osd]\nwake_on_alert = false\n");
+        let cfg = parse_status_config_from_str("[display]\nwake_on_alert = false\n");
         assert_eq!(cfg.style.osd_flags & OSD_F_WAKE_ON_ALERT, 0);
         assert_eq!(
             cfg.style.osd_flags & OSD_F_DISMISS_ON_TAP,
@@ -829,6 +894,8 @@ time_format = %H:%M:%S # 24h
         .unwrap();
         write_osd_levels(&path, 0, 2).unwrap();
         let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains("[display]"));
+        assert!(!text.contains("[osd]"));
         assert!(text.contains("brightness = auto"));
         assert!(text.contains("sleep_timeout = 2"));
         assert!(!text.contains("default_brightness"));
@@ -838,5 +905,48 @@ time_format = %H:%M:%S # 24h
         assert_eq!(cfg.style.osd_default_bright_pct, 0);
         assert_eq!(cfg.style.osd_sleep_timeout_s, 2);
         assert_eq!(cfg.style.osd_flags & OSD_F_AUTO_BRIGHT, OSD_F_AUTO_BRIGHT);
+    }
+
+    #[test]
+    fn display_preferred_over_legacy_osd() {
+        let text = r#"
+[osd]
+brightness = 1
+[display]
+brightness = 5
+"#;
+        let cfg = parse_status_config_from_str(text);
+        assert_eq!(cfg.style.osd_default_bright_pct, 5);
+    }
+
+    #[test]
+    fn parses_behavior_section() {
+        let text = r#"
+[behavior]
+startup_mode = terminal
+keyboard_opens_terminal = false
+fps = 12
+"#;
+        let cfg = parse_status_config_from_str(text);
+        assert!(cfg.behavior_from_file);
+        assert!(!cfg.startup_status);
+        assert!(!cfg.keyboard_opens_terminal);
+        assert_eq!(cfg.fps, 12.0);
+    }
+
+    #[test]
+    fn daemon_fallback_when_no_behavior() {
+        let mut cfg = parse_status_config_from_str("[header]\ndate_format = %Y\n");
+        assert!(!cfg.behavior_from_file);
+        let settings = DaemonSettings {
+            start_in_status: false,
+            keyboard_opens_terminal: false,
+            fps: 8.0,
+            ..Default::default()
+        };
+        apply_daemon_behavior_fallback(&mut cfg, &settings);
+        assert!(!cfg.startup_status);
+        assert!(!cfg.keyboard_opens_terminal);
+        assert_eq!(cfg.fps, 8.0);
     }
 }
