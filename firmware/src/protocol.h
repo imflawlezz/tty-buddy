@@ -4,7 +4,7 @@
 #include <cstdint>
 
 // Frame: AA 55 A5 5A | seq | cx | cy | flags | payload | crc16_be
-// flags: bit0 cursor, bit1 blink, bit2 activity, bit4 style-only, bit5 status, bit7 bye
+// flags: bit0 cursor, bit1 blink, bit2 activity, bit4 style, bit5 status, bit7 bye
 static constexpr uint8_t FRAME_M0 = 0xAA;
 static constexpr uint8_t FRAME_M1 = 0x55;
 static constexpr uint8_t FRAME_M2 = 0xA5;
@@ -19,7 +19,7 @@ static constexpr uint8_t DEV_OSD_SLEEP = 0x14;  // 0=never, 1..6
 static constexpr uint8_t CURSOR_VISIBLE = 0x01;
 static constexpr uint8_t CURSOR_ON = 0x02;
 static constexpr uint8_t FLAG_ACTIVITY = 0x04; // host keyboard → wake + reset sleep timer
-static constexpr uint8_t FLAG_STYLE = 0x10;    // StatusSnap style only (no status UI)
+static constexpr uint8_t FLAG_STYLE = 0x10;    // style payload; may arrive without FLAG_STATUS
 static constexpr uint8_t FLAG_STATUS = 0x20;
 static constexpr uint8_t FLAG_BYE = 0x80;
 

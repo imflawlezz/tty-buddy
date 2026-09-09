@@ -560,7 +560,12 @@ void Terminal::applyPayload() {
     if (statusSnapValid(next)) {
       linked_ = true;
       status_seen_ = true;
+      const bool style_changed =
+          memcmp(&status_.style, &next.style, sizeof(StatusStyle)) != 0;
       status_.style = next.style;
+      // No FLAG_STATUS paint path here; dirty so chrome updates while in status UI.
+      if (status_ui_ && style_changed)
+        status_dirty_ = true;
     }
     return;
   }
