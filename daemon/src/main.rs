@@ -74,6 +74,26 @@ fn main() -> Result<()> {
     }
 }
 
+fn runtime_user() -> String {
+    std::env::var("USER")
+        .or_else(|_| std::env::var("LOGNAME"))
+        .unwrap_or_else(|_| "root".into())
+}
+
+fn validate_shell_user(settings: &DaemonSettings) -> Result<()> {
+    let Some(shell_user) = settings.shell_user.as_deref() else {
+        return Ok(());
+    };
+    let current = runtime_user();
+    if shell_user != current {
+        anyhow::bail!(
+            "shell_user={} does not match the daemon runtime user={current}; run tty-buddy@{shell_user} or set shell_user to {current}",
+            shell_user
+        );
+    }
+    Ok(())
+}
+
 fn cmd_setup(config: Option<PathBuf>) -> Result<()> {
     use std::io::{stdin, stdout, Write};
     let path = config.unwrap_or_else(settings_path);
@@ -113,7 +133,7 @@ fn cmd_setup(config: Option<PathBuf>) -> Result<()> {
         }
     };
 
-    let mut settings = DaemonSettings::load_or_default(&path);
+    let mut settings = DaemonSettings::load(&path)?;
     settings.device_path = Some(chosen.path.clone());
     settings.vid = chosen.vid;
     settings.pid = chosen.pid;
@@ -143,7 +163,7 @@ fn cmd_run(
     terminal: bool,
 ) -> Result<()> {
     let path = config.unwrap_or_else(settings_path);
-    let mut settings = DaemonSettings::load_or_default(&path);
+    let mut settings = DaemonSettings::load(&path)?;
     if let Some(p) = port {
         settings.device_path = Some(p);
     }
@@ -152,6 +172,7 @@ fn cmd_run(
     }
 
     let buddy_path = resolve_buddy_config_path(settings.buddy_config.as_deref());
+    validate_shell_user(&settings)?;
 
     let mut force_status = None;
     if status {

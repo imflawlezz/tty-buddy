@@ -49,11 +49,17 @@ impl Default for DaemonSettings {
 }
 
 impl DaemonSettings {
-    pub fn load_or_default(path: &PathBuf) -> Self {
+    pub fn load(path: &Path) -> Result<Self> {
         match fs::read_to_string(path) {
-            Ok(s) => toml::from_str(&s).unwrap_or_default(),
-            Err(_) => Self::default(),
+            Ok(s) => toml::from_str(&s)
+                .with_context(|| format!("parse daemon settings {}", path.display())),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
+            Err(e) => Err(e).with_context(|| format!("read daemon settings {}", path.display())),
         }
+    }
+
+    pub fn load_or_default(path: &Path) -> Self {
+        Self::load(path).unwrap_or_default()
     }
 
     pub fn save(&self, path: &PathBuf) -> Result<()> {
@@ -141,7 +147,7 @@ mod tests {
     #[test]
     fn load_missing_uses_defaults() {
         let path = PathBuf::from("/no/such/daemon.toml");
-        let s = DaemonSettings::load_or_default(&path);
+        let s = DaemonSettings::load(&path).unwrap();
         assert_eq!(s.vid, Some(0x303A));
     }
 
@@ -163,7 +169,7 @@ mod tests {
         assert!(!text.contains("start_in_status"));
         assert!(!text.contains("keyboard_opens_terminal"));
 
-        let loaded = DaemonSettings::load_or_default(&path);
+        let loaded = DaemonSettings::load(&path).unwrap();
         assert_eq!(loaded.device_path.as_deref(), Some("/dev/tty-buddy"));
         assert_eq!(loaded.shell_user.as_deref(), Some("alice"));
         assert_eq!(loaded.vid, Some(0x303A));
@@ -178,7 +184,7 @@ mod tests {
             "status_config = \"/tmp/old.status.config\"\nshell_user = \"bob\"\n",
         )
         .unwrap();
-        let s = DaemonSettings::load_or_default(&path);
+        let s = DaemonSettings::load(&path).unwrap();
         assert_eq!(
             s.buddy_config.as_deref(),
             Some(Path::new("/tmp/old.status.config"))
@@ -194,10 +200,18 @@ mod tests {
             "device_path = \"/dev/tty-buddy\"\nstart_in_status = false\nkeyboard_opens_terminal = false\nfps = 7.5\n",
         )
         .unwrap();
-        let s = DaemonSettings::load_or_default(&path);
+        let s = DaemonSettings::load(&path).unwrap();
         assert!(!s.start_in_status);
         assert!(!s.keyboard_opens_terminal);
         assert_eq!(s.fps, 7.5);
+    }
+
+    #[test]
+    fn invalid_toml_returns_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("daemon.toml");
+        fs::write(&path, "device_path = [").unwrap();
+        assert!(DaemonSettings::load(&path).is_err());
     }
 
     #[test]
