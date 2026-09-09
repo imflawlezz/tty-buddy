@@ -1,0 +1,19 @@
+[Unit]
+Description=tty-buddy ESP32 status + console daemon (%i)
+Documentation=file:///etc/tty-buddy/daemon.toml
+After=local-fs.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=%i
+Group=%i
+SupplementaryGroups=dialout input
+WorkingDirectory=/etc/tty-buddy
+ExecStart=/usr/bin/tty-buddy run --config /etc/tty-buddy/daemon.toml
+Restart=always
+RestartSec=1
+Nice=5
+
+[Install]
+WantedBy=multi-user.target

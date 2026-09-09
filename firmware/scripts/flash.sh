@@ -62,13 +62,20 @@ if [[ -z "$PORT" ]]; then
   fi
 fi
 
-# Stop host daemon so it does not hold the serial port during flash.
-if systemctl is-active --quiet tty-buddy.service 2>/dev/null; then
-  echo "  stopping tty-buddy.service for flash…"
-  sudo systemctl stop tty-buddy.service
-  RESTART_DAEMON=1
-else
-  RESTART_DAEMON=0
+# Free the serial port if the host daemon is holding it.
+RESTART_UNITS=()
+if command -v systemctl >/dev/null 2>&1; then
+  if systemctl is-active --quiet tty-buddy.service 2>/dev/null; then
+    echo "  stopping tty-buddy.service for flash…"
+    sudo systemctl stop tty-buddy.service
+    RESTART_UNITS+=(tty-buddy.service)
+  fi
+  while read -r unit; do
+    [[ -n "$unit" ]] || continue
+    echo "  stopping $unit for flash…"
+    sudo systemctl stop "$unit"
+    RESTART_UNITS+=("$unit")
+  done < <(systemctl list-units --type=service --state=running --plain --no-legend 'tty-buddy@*' 2>/dev/null | awk '{print $1}')
 fi
 
 resolve_esptool() {
@@ -91,7 +98,7 @@ resolve_esptool() {
 }
 
 if [[ -z "$BIN" ]]; then
-  # Preferred path: let PlatformIO write bootloader + partitions + app.
+  # No path: PlatformIO upload, else esptool at bootloader/partition/app offsets.
   if command -v pio >/dev/null 2>&1; then
     echo "Flashing via PlatformIO ($ENV_NAME)"
     echo "  port: $PORT"
@@ -133,8 +140,7 @@ else
     echo "Firmware image not found: $BIN" >&2
     exit 1
   fi
-  # Release / factory images are full-chip merges flashed at 0x0.
-  # Never flash a bare PlatformIO app firmware.bin at 0x0 — that wipes the bootloader.
+  # Merged factory image → entire flash at 0x0 (not app-only firmware.bin).
   size="$(wc -c <"$BIN" | tr -d ' ')"
   if [[ "$size" -lt 200000 ]]; then
     echo "Refusing to flash a small image ($size bytes) at 0x0." >&2
@@ -149,9 +155,9 @@ else
     write_flash -z 0x0 "$BIN"
 fi
 
-if [[ "$RESTART_DAEMON" -eq 1 ]]; then
-  echo "  starting tty-buddy.service…"
-  sudo systemctl start tty-buddy.service || true
-fi
+for unit in "${RESTART_UNITS[@]:-}"; do
+  echo "  starting $unit…"
+  sudo systemctl start "$unit" || true
+done
 
-echo "Done. Unplug/replug if the display stays blank, then check: systemctl status tty-buddy"
+echo "Done. Unplug/replug if the display stays blank, then check: systemctl status 'tty-buddy@*'"

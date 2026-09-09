@@ -1,9 +1,8 @@
 # tty-buddy daemon settings (/etc/tty-buddy/daemon.toml)
 #
-# Fresh install: leave as-is. udev creates /dev/tty-buddy when the ESP is
-# plugged in. If the symlink is missing, the daemon still matches Espressif
-# USB-JTAG (303a:1001). Run `tty-buddy setup` only when several boards are
-# attached and you need to pin one.
+# Defaults work for a single board. udev creates /dev/tty-buddy; otherwise the
+# daemon matches Espressif USB-JTAG (303a:1001). Use `tty-buddy setup` only to
+# pin one board when several are attached.
 
 device_path = "/dev/tty-buddy"
 vid = 12346   # 0x303A Espressif
@@ -12,7 +11,7 @@ pid = 4097    # 0x1001 USB JTAG/serial
 
 status_config = "/etc/tty-buddy/status.config"
 
-# Filled by install.sh (the user who ran sudo). Console PTY runs as this user.
+# Filled by package install / configure-instance (the service user).
 shell_user = "REPLACE_ME"
 
 # true = status GUI first; OSD long-press toggles console

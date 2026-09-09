@@ -1,56 +1,39 @@
 #!/usr/bin/env bash
-# Build tty-buddy-*-x86_64-linux.tar.gz on this machine.
-# macOS: Docker Desktop. Linux x86_64: native cargo.
+# Build tty-buddy-<ver>-<x86_64|aarch64>-linux.tar.gz into daemon/dist/.
 set -euo pipefail
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=arch.sh
+source "$HERE/arch.sh"
+
+ROOT="$(cd "$HERE/.." && pwd)"
 OUT="$ROOT/dist"
 VER="$(grep '^version' "$ROOT/Cargo.toml" | head -1 | cut -d'"' -f2)"
-NAME="tty-buddy-${VER}-x86_64-linux"
+resolve_arch "${1:-host}"
 
-mkdir -p "$OUT/$NAME/bin" "$OUT/$NAME/etc" "$OUT/$NAME/systemd" "$OUT/$NAME/udev"
+NAME="tty-buddy-${VER}-${TAR_ARCH}-linux"
+STAGE="$OUT/$NAME"
+rm -rf "$STAGE"
+mkdir -p "$STAGE/bin" "$STAGE/etc" "$STAGE/systemd" "$STAGE/udev" "$STAGE/lib"
 
-build_native() {
-  echo "==> native release build"
-  (cd "$ROOT" && cargo build --release)
-}
-
-build_docker() {
-  echo "==> cross-build (docker rust:bookworm)"
-  if ! docker info >/dev/null 2>&1; then
-    echo "Docker is not running. Start Docker Desktop, then re-run." >&2
-    exit 1
-  fi
-  docker run --rm \
-    -v "$ROOT:/app" -w /app \
-    -v "$HOME/.cargo/registry:/usr/local/cargo/registry" \
-    -v "$HOME/.cargo/git:/usr/local/cargo/git" \
-    rust:1-bookworm bash -c '
-      apt-get update -qq
-      DEBIAN_FRONTEND=noninteractive apt-get install -y -qq pkg-config libudev-dev >/dev/null
-      cargo build --release
-    '
-}
-
-ARCH="$(uname -m)"
-OS="$(uname -s)"
-if [[ "$OS" == "Linux" && ( "$ARCH" == "x86_64" || "$ARCH" == "amd64" ) ]]; then
-  build_native
-else
-  build_docker
-fi
-
-BIN="$ROOT/target/release/tty-buddy"
-[[ -x "$BIN" ]] || { echo "missing $BIN" >&2; exit 1; }
-
-cp "$BIN" "$OUT/$NAME/bin/"
-cp "$ROOT/status.config" "$OUT/$NAME/etc/"
-cp "$ROOT/packaging/daemon.toml.example" "$OUT/$NAME/etc/daemon.toml"
-cp "$ROOT/packaging/tty-buddy.service" "$OUT/$NAME/systemd/"
-cp "$ROOT/udev/99-tty-buddy.rules" "$OUT/$NAME/udev/"
-cp "$ROOT/packaging/install.sh" "$OUT/$NAME/"
-cp "$ROOT/packaging/flash-firmware.sh" "$OUT/$NAME/"
-chmod +x "$OUT/$NAME/bin/tty-buddy" "$OUT/$NAME/install.sh" "$OUT/$NAME/flash-firmware.sh"
+BIN="$("$HERE/build-binary.sh" "$DEB_ARCH")"
+cp "$BIN" "$STAGE/bin/tty-buddy"
+cp "$ROOT/status.config" "$STAGE/etc/"
+cp "$ROOT/packaging/daemon.toml.example" "$STAGE/etc/daemon.toml"
+cp "$ROOT/packaging/tty-buddy@.service" "$STAGE/systemd/"
+cp "$ROOT/udev/99-tty-buddy.rules" "$STAGE/udev/"
+cp "$ROOT/packaging/install.sh" "$STAGE/"
+cp "$ROOT/packaging/uninstall.sh" "$STAGE/"
+cp "$ROOT/packaging/configure-instance.sh" "$STAGE/lib/"
+chmod +x "$STAGE/bin/tty-buddy" "$STAGE/install.sh" "$STAGE/uninstall.sh" \
+  "$STAGE/lib/configure-instance.sh"
 
 tar -C "$OUT" -czf "$OUT/$NAME.tar.gz" "$NAME"
+rm -rf "$STAGE"
 echo "==> $OUT/$NAME.tar.gz"
 ls -lh "$OUT/$NAME.tar.gz"
+
+if [[ -n "${DEST:-}" && "$DEST" != "$OUT" ]]; then
+  mkdir -p "$DEST"
+  cp -f "$OUT/$NAME.tar.gz" "$DEST/"
+fi
