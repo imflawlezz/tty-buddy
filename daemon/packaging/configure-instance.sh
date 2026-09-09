@@ -49,7 +49,7 @@ if [[ -f /etc/tty-buddy/status.config ]]; then
   chmod 644 /etc/tty-buddy/status.config
 fi
 
-if grep -qE '^shell_user = "(REPLACE_ME|dih)"$' /etc/tty-buddy/daemon.toml 2>/dev/null \
+if grep -qE '^shell_user = "REPLACE_ME"$' /etc/tty-buddy/daemon.toml 2>/dev/null \
   || ! grep -qE '^shell_user = "' /etc/tty-buddy/daemon.toml 2>/dev/null; then
   if grep -qE '^shell_user = ' /etc/tty-buddy/daemon.toml; then
     sed -i "s/^shell_user = .*/shell_user = \"$USER_NAME\"/" /etc/tty-buddy/daemon.toml
