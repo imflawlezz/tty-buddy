@@ -17,13 +17,32 @@ use crate::protocol::{
     FLAG_ACTIVITY, FLAG_BYE, FLAG_CURSOR_ON, FLAG_CURSOR_VISIBLE, FLAG_STATUS, FLAG_STYLE,
     PAYLOAD_LEN,
 };
-use crate::serial_io::{BuddySerial, DeviceEvent};
+use crate::serial_io::{BuddySerial, DeviceEvent, DeviceTransport};
 use crate::settings::DaemonSettings;
 use crate::status_config::{
     apply_daemon_behavior_fallback, apply_osd_levels, load_status_config, maybe_reload,
     write_osd_levels, StatusUiConfig,
 };
 use crate::terminal::PtySession;
+
+/// Tunables for [`run_session_with`] (production uses [`SessionOpts::production`]).
+pub struct SessionOpts {
+    pub fps_override: Option<f32>,
+    pub force_status: Option<bool>,
+    pub settle: Duration,
+    pub enable_keyboard: bool,
+}
+
+impl SessionOpts {
+    pub fn production(fps_override: Option<f32>, force_status: Option<bool>) -> Self {
+        Self {
+            fps_override,
+            force_status,
+            settle: Duration::from_millis(200),
+            enable_keyboard: true,
+        }
+    }
+}
 
 pub fn run_forever(
     settings: &DaemonSettings,
@@ -99,7 +118,11 @@ fn enter_status(keyboard: &mut Keyboard, watch_for_terminal: bool) {
     }
 }
 
-fn push_style(serial: &mut BuddySerial, cfg: &StatusUiConfig, metrics: &mut MetricsCollector) {
+fn push_style<L: DeviceTransport>(
+    serial: &mut L,
+    cfg: &StatusUiConfig,
+    metrics: &mut MetricsCollector,
+) {
     match metrics.sample(cfg) {
         Ok(snap) => {
             if let Err(e) = serial.send_frame(0, 0, FLAG_STYLE, &snap.to_payload()) {
@@ -144,19 +167,43 @@ pub fn run_session(
     force_status: Option<bool>,
     running: &AtomicBool,
 ) -> Result<()> {
-    let mut serial = BuddySerial::open(device)?;
+    let serial = BuddySerial::open(device)?;
+    run_session_with(
+        serial,
+        || device_still_there(device, settings),
+        settings,
+        buddy_config,
+        running,
+        SessionOpts::production(fps_override, force_status),
+    )
+}
+
+pub(crate) fn run_session_with<L, P>(
+    mut serial: L,
+    mut still_there: P,
+    settings: &DaemonSettings,
+    buddy_config: &Path,
+    running: &AtomicBool,
+    opts: SessionOpts,
+) -> Result<()>
+where
+    L: DeviceTransport,
+    P: FnMut() -> bool,
+{
     let mut cfg = load_status_config(buddy_config)
         .with_context(|| format!("load {}", buddy_config.display()))?;
     apply_daemon_behavior_fallback(&mut cfg, settings);
-    if let Some(f) = fps_override {
+    if let Some(f) = opts.fps_override {
         cfg.fps = f.max(1.0);
     }
-    if let Some(s) = force_status {
+    if let Some(s) = opts.force_status {
         cfg.startup_status = s;
     }
     let mut metrics = MetricsCollector::new();
     let _ = metrics.sample(&cfg)?;
-    std::thread::sleep(Duration::from_millis(200));
+    if !opts.settle.is_zero() {
+        std::thread::sleep(opts.settle);
+    }
     push_style(&mut serial, &cfg, &mut metrics);
 
     let mut status_mode = cfg.startup_status;
@@ -170,10 +217,14 @@ pub fn run_session(
     let mut last_kb_scan = Instant::now() - Duration::from_secs(2);
 
     let mut pty: Option<PtySession> = None;
-    let mut keyboard = Keyboard::open().unwrap_or_else(|e| {
-        eprintln!("keyboard: {e}");
+    let mut keyboard = if opts.enable_keyboard {
+        Keyboard::open().unwrap_or_else(|e| {
+            eprintln!("keyboard: {e}");
+            Keyboard::disabled()
+        })
+    } else {
         Keyboard::disabled()
-    });
+    };
 
     let interactive = std::io::stdin().is_terminal();
     if interactive && !status_mode {
@@ -192,13 +243,13 @@ pub fn run_session(
     );
 
     while running.load(Ordering::SeqCst) {
-        if !device_still_there(device, settings) {
+        if !still_there() {
             anyhow::bail!("device unplugged");
         }
 
         if let Some(mut new_cfg) = maybe_reload(buddy_config, &cfg) {
             apply_daemon_behavior_fallback(&mut new_cfg, settings);
-            if let Some(f) = fps_override {
+            if let Some(f) = opts.fps_override {
                 new_cfg.fps = f.max(1.0);
             }
             let kb_changed = new_cfg.keyboard_opens_terminal != cfg.keyboard_opens_terminal;
@@ -295,14 +346,19 @@ pub fn run_session(
                     }
                 }
                 last_term = Instant::now();
-                serial.send_frame(cx, cy, flags, &payload)
+                Some(serial.send_frame(cx, cy, flags, &payload))
             } else if last_status.elapsed() >= status_dt {
                 let snap = metrics.sample(&cfg)?;
                 let payload = snap.to_payload();
-                last_status = Instant::now();
-                serial.send_frame(0, 0, FLAG_STATUS, &payload)
+                match serial.send_frame(0, 0, FLAG_STATUS, &payload) {
+                    Ok(()) => {
+                        last_status = Instant::now();
+                        Some(Ok(()))
+                    }
+                    Err(e) => Some(Err(e)),
+                }
             } else {
-                Ok(())
+                None
             }
         } else {
             ensure_pty(&mut pty, settings)?;
@@ -397,21 +453,23 @@ pub fn run_session(
                     flags |= FLAG_ACTIVITY;
                 }
                 last_term = Instant::now();
-                serial.send_frame(cx, cy, flags, &payload)
+                Some(serial.send_frame(cx, cy, flags, &payload))
             } else {
-                Ok(())
+                None
             }
         };
 
-        match send_result {
-            Ok(()) => consecutive_fail = 0,
-            Err(e) => {
-                consecutive_fail += 1;
-                eprintln!("serial I/O: {e:#} ({consecutive_fail})");
-                if consecutive_fail >= 3 {
-                    anyhow::bail!("serial link lost");
+        if let Some(result) = send_result {
+            match result {
+                Ok(()) => consecutive_fail = 0,
+                Err(e) => {
+                    consecutive_fail += 1;
+                    eprintln!("serial I/O: {e:#} ({consecutive_fail})");
+                    if consecutive_fail >= 3 {
+                        anyhow::bail!("serial link lost");
+                    }
+                    std::thread::sleep(Duration::from_millis(150));
                 }
-                std::thread::sleep(Duration::from_millis(150));
             }
         }
 
@@ -430,12 +488,352 @@ pub fn run_session(
 }
 
 /// CSI arrows → SS3 when the PTY is in application-cursor mode.
-fn map_app_cursor(key: &[u8]) -> Option<Vec<u8>> {
+pub(crate) fn map_app_cursor(key: &[u8]) -> Option<Vec<u8>> {
     match key {
         b"\x1b[A" => Some(b"\x1bOA".to_vec()),
         b"\x1b[B" => Some(b"\x1bOB".to_vec()),
         b"\x1b[C" => Some(b"\x1bOC".to_vec()),
         b"\x1b[D" => Some(b"\x1bOD".to_vec()),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocol::{STATUS_SNAP_LEN, STATUS_VER};
+    use crate::serial_io::DeviceEvent;
+    use std::collections::VecDeque;
+    use std::fs;
+    use std::io::Write;
+    use std::sync::{Arc, Mutex};
+
+    struct MockLink {
+        frames: Arc<Mutex<Vec<u8>>>,
+        events: Arc<Mutex<VecDeque<DeviceEvent>>>,
+        fail_remaining: u32,
+        stop_after_ok_frames: Option<usize>,
+        running: Arc<AtomicBool>,
+        ok_frames: usize,
+        on_first_status: Vec<DeviceEvent>,
+        saw_status: bool,
+    }
+
+    impl MockLink {
+        fn new(running: Arc<AtomicBool>) -> Self {
+            Self {
+                frames: Arc::new(Mutex::new(Vec::new())),
+                events: Arc::new(Mutex::new(VecDeque::new())),
+                fail_remaining: 0,
+                stop_after_ok_frames: None,
+                running,
+                ok_frames: 0,
+                on_first_status: Vec::new(),
+                saw_status: false,
+            }
+        }
+    }
+
+    impl DeviceTransport for MockLink {
+        fn poll_events(&mut self) -> Vec<DeviceEvent> {
+            let mut q = self.events.lock().unwrap();
+            q.drain(..).collect()
+        }
+
+        fn send_frame(
+            &mut self,
+            _cx: u8,
+            _cy: u8,
+            flags: u8,
+            payload: &[u8; PAYLOAD_LEN],
+        ) -> Result<()> {
+            if self.fail_remaining > 0 {
+                self.fail_remaining -= 1;
+                anyhow::bail!("mock serial fail");
+            }
+            self.frames.lock().unwrap().push(flags);
+            self.ok_frames += 1;
+
+            if flags & FLAG_STATUS != 0 && !self.saw_status {
+                self.saw_status = true;
+                if !self.on_first_status.is_empty() {
+                    let mut q = self.events.lock().unwrap();
+                    for ev in self.on_first_status.drain(..) {
+                        q.push_back(ev);
+                    }
+                }
+                assert_eq!(&payload[..4], b"TBST");
+                assert_eq!(payload[4], STATUS_VER);
+                assert!(payload[STATUS_SNAP_LEN..].iter().all(|&b| b == 0));
+            }
+
+            if let Some(n) = self.stop_after_ok_frames {
+                if self.ok_frames >= n {
+                    self.running.store(false, Ordering::SeqCst);
+                }
+            }
+            Ok(())
+        }
+    }
+
+    fn test_opts(force_status: Option<bool>) -> SessionOpts {
+        SessionOpts {
+            fps_override: None,
+            force_status,
+            settle: Duration::ZERO,
+            enable_keyboard: false,
+        }
+    }
+
+    fn write_buddy(path: &Path, body: &str) {
+        let mut f = fs::File::create(path).unwrap();
+        f.write_all(body.as_bytes()).unwrap();
+    }
+
+    fn settings() -> DaemonSettings {
+        DaemonSettings {
+            shell_user: None,
+            keyboard_opens_terminal: false,
+            start_in_status: true,
+            fps: 10.0,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn map_app_cursor_arrows() {
+        assert_eq!(map_app_cursor(b"\x1b[A"), Some(b"\x1bOA".to_vec()));
+        assert_eq!(map_app_cursor(b"\x1b[B"), Some(b"\x1bOB".to_vec()));
+        assert_eq!(map_app_cursor(b"\x1b[C"), Some(b"\x1bOC".to_vec()));
+        assert_eq!(map_app_cursor(b"\x1b[D"), Some(b"\x1bOD".to_vec()));
+        assert_eq!(map_app_cursor(b"x"), None);
+    }
+
+    #[test]
+    fn device_still_there_requires_existing_path() {
+        let s = DaemonSettings::default();
+        assert!(!device_still_there("/no/such/tty-buddy-device", &s));
+    }
+
+    #[test]
+    fn status_session_sends_style_then_status_then_bye() {
+        let dir = tempfile::tempdir().unwrap();
+        let buddy = dir.path().join("buddy.config");
+        write_buddy(
+            &buddy,
+            "[behavior]\nstartup_mode = status\nkeyboard_opens_terminal = false\nfps = 30\n",
+        );
+
+        let running = Arc::new(AtomicBool::new(true));
+        let mut link = MockLink::new(running.clone());
+        let frames = link.frames.clone();
+        link.stop_after_ok_frames = Some(2);
+
+        let t0 = Instant::now();
+        run_session_with(
+            link,
+            || true,
+            &settings(),
+            &buddy,
+            &running,
+            test_opts(Some(true)),
+        )
+        .unwrap();
+        assert!(t0.elapsed() < Duration::from_secs(3));
+
+        let flags = frames.lock().unwrap().clone();
+        assert!(flags.len() >= 3, "got {flags:?}");
+        assert_eq!(flags[0], FLAG_STYLE);
+        assert!(flags.iter().any(|f| f & FLAG_STATUS != 0));
+        assert_eq!(*flags.last().unwrap(), FLAG_BYE);
+    }
+
+    #[test]
+    fn force_fps_override_and_force_status() {
+        let dir = tempfile::tempdir().unwrap();
+        let buddy = dir.path().join("buddy.config");
+        write_buddy(
+            &buddy,
+            "[behavior]\nstartup_mode = terminal\nkeyboard_opens_terminal = false\nfps = 5\n",
+        );
+        let running = Arc::new(AtomicBool::new(true));
+        let mut link = MockLink::new(running.clone());
+        let frames = link.frames.clone();
+        link.stop_after_ok_frames = Some(2);
+        run_session_with(
+            link,
+            || true,
+            &settings(),
+            &buddy,
+            &running,
+            SessionOpts {
+                fps_override: Some(25.0),
+                force_status: Some(true),
+                settle: Duration::ZERO,
+                enable_keyboard: false,
+            },
+        )
+        .unwrap();
+        let flags = frames.lock().unwrap().clone();
+        assert_eq!(flags[0], FLAG_STYLE);
+        assert!(flags.contains(&FLAG_STATUS));
+    }
+
+    #[test]
+    fn mode_toggle_switches_to_terminal_frames() {
+        let dir = tempfile::tempdir().unwrap();
+        let buddy = dir.path().join("buddy.config");
+        write_buddy(
+            &buddy,
+            "[behavior]\nstartup_mode = status\nkeyboard_opens_terminal = false\nfps = 30\n",
+        );
+        let running = Arc::new(AtomicBool::new(true));
+        let mut link = MockLink::new(running.clone());
+        let frames = link.frames.clone();
+        link.on_first_status = vec![DeviceEvent::ModeToggle];
+        link.stop_after_ok_frames = Some(4);
+        run_session_with(
+            link,
+            || true,
+            &settings(),
+            &buddy,
+            &running,
+            test_opts(Some(true)),
+        )
+        .unwrap();
+        let flags = frames.lock().unwrap().clone();
+        assert!(flags.contains(&FLAG_STYLE));
+        assert!(flags.contains(&FLAG_STATUS));
+        assert!(
+            flags
+                .iter()
+                .any(|f| f & (FLAG_STATUS | FLAG_STYLE | FLAG_BYE) == 0),
+            "expected a terminal frame in {flags:?}"
+        );
+    }
+
+    #[test]
+    fn osd_brightness_and_sleep_write_buddy_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let buddy = dir.path().join("buddy.config");
+        write_buddy(
+            &buddy,
+            "[behavior]\nstartup_mode = status\nkeyboard_opens_terminal = false\nfps = 30\n\n[display]\nbrightness = 3\nsleep_timeout = 2\n",
+        );
+        let running = Arc::new(AtomicBool::new(true));
+        let mut link = MockLink::new(running.clone());
+        // Events must be queued before run: stop_after on the first status
+        // frame would exit before poll_events applies OSD writeback.
+        {
+            let mut q = link.events.lock().unwrap();
+            q.push_back(DeviceEvent::Brightness(5));
+            q.push_back(DeviceEvent::Sleep(6));
+        }
+        link.stop_after_ok_frames = Some(2);
+        run_session_with(
+            link,
+            || true,
+            &settings(),
+            &buddy,
+            &running,
+            test_opts(Some(true)),
+        )
+        .unwrap();
+        let text = fs::read_to_string(&buddy).unwrap();
+        assert!(text.contains("brightness = 5"), "{text}");
+        assert!(text.contains("sleep_timeout = 6"), "{text}");
+    }
+
+    #[test]
+    fn three_serial_failures_end_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let buddy = dir.path().join("buddy.config");
+        write_buddy(
+            &buddy,
+            "[behavior]\nstartup_mode = status\nkeyboard_opens_terminal = false\nfps = 30\n",
+        );
+        let running = Arc::new(AtomicBool::new(true));
+        let mut link = MockLink::new(running.clone());
+        link.fail_remaining = 4;
+        let err = run_session_with(
+            link,
+            || true,
+            &settings(),
+            &buddy,
+            &running,
+            test_opts(Some(true)),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("serial link lost"), "got {err:#}");
+    }
+
+    #[test]
+    fn device_unplug_ends_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let buddy = dir.path().join("buddy.config");
+        write_buddy(
+            &buddy,
+            "[behavior]\nstartup_mode = status\nkeyboard_opens_terminal = false\nfps = 30\n",
+        );
+        let running = Arc::new(AtomicBool::new(true));
+        let link = MockLink::new(running.clone());
+        let checks = Arc::new(Mutex::new(0u32));
+        let checks_c = checks.clone();
+        let err = run_session_with(
+            link,
+            move || {
+                let mut n = checks_c.lock().unwrap();
+                *n += 1;
+                *n < 2
+            },
+            &settings(),
+            &buddy,
+            &running,
+            test_opts(Some(true)),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("device unplugged"), "got {err:#}");
+    }
+
+    #[test]
+    fn config_reload_pushes_style_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let buddy = dir.path().join("buddy.config");
+        write_buddy(
+            &buddy,
+            "[behavior]\nstartup_mode = status\nkeyboard_opens_terminal = false\nfps = 30\n\n[globals]\nlabel_color = #111111\n",
+        );
+        let running = Arc::new(AtomicBool::new(true));
+        let mut link = MockLink::new(running.clone());
+        let frames = link.frames.clone();
+        let buddy_c = buddy.clone();
+        let touched = Arc::new(AtomicBool::new(false));
+        let touched_c = touched.clone();
+        link.stop_after_ok_frames = Some(4);
+        run_session_with(
+            link,
+            move || {
+                if !touched_c.load(Ordering::SeqCst) {
+                    std::thread::sleep(Duration::from_millis(20));
+                    write_buddy(
+                        &buddy_c,
+                        "[behavior]\nstartup_mode = status\nkeyboard_opens_terminal = false\nfps = 30\n\n[globals]\nlabel_color = #ABCDEF\n",
+                    );
+                    touched_c.store(true, Ordering::SeqCst);
+                }
+                true
+            },
+            &settings(),
+            &buddy,
+            &running,
+            test_opts(Some(true)),
+        )
+        .unwrap();
+        let flags = frames.lock().unwrap().clone();
+        let style_count = flags.iter().filter(|f| **f == FLAG_STYLE).count();
+        assert!(
+            style_count >= 2,
+            "expected reload style push, got {flags:?}"
+        );
     }
 }
