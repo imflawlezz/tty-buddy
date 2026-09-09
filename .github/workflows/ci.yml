@@ -58,7 +58,7 @@ jobs:
         with:
           path: |
             ~/.platformio/.cache
-            firmware/.pio
+            ~/.platformio/packages
           key: pio-${{ runner.os }}-${{ hashFiles('firmware/platformio.ini', 'firmware/include/**', 'firmware/src/**') }}
 
       - name: Install PlatformIO
@@ -72,6 +72,7 @@ jobs:
 
       - name: Check factory merge artifact
         run: |
-          VER="$(sed -n 's/^version = "\(.*\)"/\1/p' ../daemon/Cargo.toml | head -1)"
+          VER="$(grep -m1 '^version = "' ../daemon/Cargo.toml | cut -d'"' -f2)"
+          test -n "$VER"
           test -f "dist/tty-buddy-firmware-${VER}.bin"
           ls -lh "dist/tty-buddy-firmware-${VER}.bin"
