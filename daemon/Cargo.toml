@@ -1,6 +1,6 @@
 [package]
 name = "tty-buddy"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2021"
 description = "Host daemon for tty-buddy ESP32 status display + PTY bridge"
 license = "MIT"
