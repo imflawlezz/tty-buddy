@@ -32,7 +32,9 @@ Implementation: [`daemon/src/settings.rs`](../../daemon/src/settings.rs), [`daem
 | Device USB reconnect | New session: reloads buddy.config; same in-memory `daemon.toml` + CLI overrides |
 | OSD brightness / sleep on device | Rewrites `brightness` + `sleep_timeout` in buddy.config (see [OSD writeback](#osd-writeback)) |
 
-Status snapshots stay ~1 Hz. `fps` caps **terminal** frame sends only.
+Status snapshots stay ~1 Hz for `/proc` metrics (CPU, mem, disk, load, …).
+Interface IPs (`ip`) and systemd service lists (`systemctl`) are cached for
+about **3 seconds** between forks. `fps` caps **terminal** frame sends only.
 
 ---
 
@@ -213,7 +215,9 @@ onto the wire.
 | anything else (incl. `v4`, `4`, `ipv4`, garbage) | IPv4 |
 
 Empty section / no keys → no interface rows. The shipped template leaves this
-section empty on purpose; add only the interfaces you want shown.
+section empty on purpose; add only the interfaces you want shown. Address
+lookups use `ip` and share the ~3 s slow-poll cache with services (see
+[Reload matrix](#reload-matrix)).
 
 ---
 
@@ -232,7 +236,9 @@ section empty on purpose; add only the interfaces you want shown.
 
 Unfiltered: `systemctl list-units --type=service --all …`, then sort failed
 → transitioning → active → inactive → other, truncate to **80**. Display
-names strip `.service` and truncate to **40** characters.
+names strip `.service` and truncate to **40** characters. Fresh `systemctl`
+forks are rate-limited by the ~3 s slow-poll cache (see
+[Reload matrix](#reload-matrix)).
 
 ---
 

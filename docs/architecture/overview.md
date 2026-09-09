@@ -10,7 +10,7 @@ messages over USB-Serial/JTAG (CDC). Wire details: [protocol reference](../refer
 The SuperMini presents only a **USB device** port (Serial/JTAG). It cannot
 host a keyboard. Putting the keyboard and PTY on Linux keeps the ESP as a
 display + input bridge for one button, and lets status metrics use normal
-Linux APIs (`/proc`, `systemctl`, netlink-style iface queries).
+Linux APIs (`/proc`, `systemctl`, and `ip addr`).
 
 ## Runtime roles
 
@@ -31,7 +31,8 @@ Entry point: `tty-buddy run` (systemd `tty-buddy@<user>`).
 **Status mode.** Sample about once per second, pack StatusSnap v13, send
 with `FLAG_STATUS`. Optionally watch keyboards; activity can switch to
 terminal and set `FLAG_ACTIVITY` (wake). Style (`FLAG_STYLE`) is pushed when
-config/metrics style inputs change.
+config/metrics style inputs change; the device dirties status chrome when
+that style differs while already in status mode.
 
 **Terminal mode.** Spawn the systemd instance user’s login shell inside a
 PTY and push the cell payload at up to `fps` (keystrokes force an immediate

@@ -32,7 +32,7 @@ remainder zero.
 | `0x01` | `FLAG_CURSOR_VISIBLE` | Cursor position is meaningful |
 | `0x02` | `FLAG_CURSOR_ON` | Cursor blink phase on |
 | `0x04` | `FLAG_ACTIVITY` | User activity — wake / refresh |
-| `0x10` | `FLAG_STYLE` | Payload carries style (from StatusSnap packing) |
+| `0x10` | `FLAG_STYLE` | Payload carries style (from StatusSnap packing). While already in status mode, the device refreshes chrome if style bytes changed — no need to wait for a differing `FLAG_STATUS` snap |
 | `0x20` | `FLAG_STATUS` | Payload carries StatusSnap metrics |
 | `0x80` | `FLAG_BYE` | Session teardown blank |
 
