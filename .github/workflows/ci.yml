@@ -72,7 +72,6 @@ jobs:
 
       - name: Check factory merge artifact
         run: |
-          test -f dist/tty-buddy-firmware.bin
           VER="$(sed -n 's/^version = "\(.*\)"/\1/p' ../daemon/Cargo.toml | head -1)"
           test -f "dist/tty-buddy-firmware-${VER}.bin"
-          ls -lh dist/tty-buddy-firmware*.bin
+          ls -lh "dist/tty-buddy-firmware-${VER}.bin"
