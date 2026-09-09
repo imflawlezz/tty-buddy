@@ -62,9 +62,12 @@ pub fn run_forever(
 }
 
 fn device_still_there(path: &str, settings: &DaemonSettings) -> bool {
-    Path::new(path).exists()
-        || Path::new("/dev/tty-buddy").exists()
-        || resolve_device(settings).is_ok()
+    if !Path::new(path).exists() {
+        return false;
+    }
+    resolve_device(settings)
+        .map(|current| current == path)
+        .unwrap_or(true)
 }
 
 fn ensure_pty(pty: &mut Option<PtySession>, settings: &DaemonSettings) -> Result<()> {
