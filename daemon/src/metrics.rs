@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::process::Command;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use chrono::Local;
@@ -15,10 +15,15 @@ use crate::protocol::{
 };
 use crate::status_config::{IpMode, StatusUiConfig};
 
+/// Cache TTL for `ip` / `systemctl` forks; `/proc` metrics still refresh ~1 Hz.
+const SLOW_POLL_TTL: Duration = Duration::from_secs(3);
+
 pub struct MetricsCollector {
     prev_cpu: Option<(u64, u64)>,
     prev_net: HashMap<String, (Instant, u64, u64)>,
     net_rates: HashMap<String, (u32, u32)>,
+    iface_ips: HashMap<(String, IpMode), (Instant, String)>,
+    services_cache: Option<(Instant, Option<Vec<String>>, Vec<StatusSvc>)>,
 }
 
 impl Default for MetricsCollector {
@@ -33,6 +38,8 @@ impl MetricsCollector {
             prev_cpu: None,
             prev_net: HashMap::new(),
             net_rates: HashMap::new(),
+            iface_ips: HashMap::new(),
+            services_cache: None,
         }
     }
 
@@ -85,7 +92,7 @@ impl MetricsCollector {
         }
 
         snap.ifaces = self.collect_ifaces(&cfg.interfaces);
-        snap.services = collect_services(cfg.services_filter.as_deref());
+        snap.services = self.collect_services_cached(cfg.services_filter.as_deref());
 
         Ok(snap)
     }
@@ -107,6 +114,30 @@ impl MetricsCollector {
         out
     }
 
+    fn iface_ip_cached(&mut self, name: &str, mode: IpMode) -> String {
+        let key = (name.to_string(), mode);
+        if let Some((t, ip)) = self.iface_ips.get(&key) {
+            if t.elapsed() < SLOW_POLL_TTL {
+                return ip.clone();
+            }
+        }
+        let ip = iface_ip(name, mode).unwrap_or_default();
+        self.iface_ips.insert(key, (Instant::now(), ip.clone()));
+        ip
+    }
+
+    fn collect_services_cached(&mut self, filter: Option<&[String]>) -> Vec<StatusSvc> {
+        let key = filter.map(|f| f.to_vec());
+        if let Some((t, cached_key, svcs)) = &self.services_cache {
+            if t.elapsed() < SLOW_POLL_TTL && cached_key == &key {
+                return svcs.clone();
+            }
+        }
+        let svcs = collect_services(filter);
+        self.services_cache = Some((Instant::now(), key, svcs.clone()));
+        svcs
+    }
+
     fn collect_ifaces(&mut self, wanted: &[(String, IpMode)]) -> Vec<StatusIface> {
         if wanted.is_empty() {
             return Vec::new();
@@ -124,7 +155,7 @@ impl MetricsCollector {
             }
             self.prev_net.insert(name.clone(), (now, rx, tx));
             let (rx_bps, tx_bps) = self.net_rates.get(name).copied().unwrap_or((0, 0));
-            let ip = iface_ip(name, *mode).unwrap_or_default();
+            let ip = self.iface_ip_cached(name, *mode);
             out.push(StatusIface {
                 name: name.clone(),
                 ip,

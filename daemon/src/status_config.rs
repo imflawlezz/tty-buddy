@@ -30,7 +30,7 @@ pub struct StatusUiConfig {
     pub behavior_from_file: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IpMode {
     V4,
     V6,
