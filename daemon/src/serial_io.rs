@@ -10,6 +10,8 @@ use crate::protocol::{
     build_frame, DEV_MODE_TOGGLE, DEV_OSD_BRIGHT, DEV_OSD_SLEEP, FRAME_ACK, FRAME_NAK, PAYLOAD_LEN,
 };
 
+const INBOX_CAP: usize = 4096;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeviceEvent {
     ModeToggle,
@@ -17,6 +19,12 @@ pub enum DeviceEvent {
     Brightness(u8),
     /// 0 = never, 1..=6 = level.
     Sleep(u8),
+}
+
+/// Host↔device link used by the session loop (real serial or test double).
+pub trait DeviceTransport {
+    fn poll_events(&mut self) -> Vec<DeviceEvent>;
+    fn send_frame(&mut self, cx: u8, cy: u8, flags: u8, payload: &[u8; PAYLOAD_LEN]) -> Result<()>;
 }
 
 pub struct BuddySerial {
@@ -55,7 +63,10 @@ impl BuddySerial {
         loop {
             match self.port.read(&mut buf) {
                 Ok(0) => break,
-                Ok(n) => self.inbox.extend_from_slice(&buf[..n]),
+                Ok(n) => {
+                    self.inbox.extend_from_slice(&buf[..n]);
+                    trim_inbox(&mut self.inbox);
+                }
                 Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => break,
                 Err(_) => break,
             }
@@ -68,34 +79,7 @@ impl BuddySerial {
 
     pub fn poll_events(&mut self) -> Vec<DeviceEvent> {
         self.pump_inbox();
-        let mut out = Vec::new();
-        let mut i = 0;
-        while i < self.inbox.len() {
-            match self.inbox[i] {
-                DEV_MODE_TOGGLE => {
-                    out.push(DeviceEvent::ModeToggle);
-                    self.inbox.remove(i);
-                }
-                DEV_OSD_BRIGHT => {
-                    if i + 1 >= self.inbox.len() {
-                        break;
-                    }
-                    let v = self.inbox[i + 1];
-                    self.inbox.drain(i..=i + 1);
-                    out.push(DeviceEvent::Brightness(v.min(6)));
-                }
-                DEV_OSD_SLEEP => {
-                    if i + 1 >= self.inbox.len() {
-                        break;
-                    }
-                    let v = self.inbox[i + 1];
-                    self.inbox.drain(i..=i + 1);
-                    out.push(DeviceEvent::Sleep(v.min(6)));
-                }
-                _ => i += 1,
-            }
-        }
-        out
+        drain_device_events(&mut self.inbox)
     }
 
     fn wait_ack(&mut self, seq: u8, timeout: Duration) -> Result<bool> {
@@ -103,21 +87,25 @@ impl BuddySerial {
         while Instant::now() < deadline {
             self.pump_inbox();
             let mut i = 0;
-            while i + 1 < self.inbox.len() {
+            while i < self.inbox.len() {
                 let a = self.inbox[i];
-                let b = self.inbox[i + 1];
-                if a == FRAME_ACK && b == seq {
-                    self.inbox.drain(..=i + 1);
-                    return Ok(true);
-                }
-                if a == FRAME_NAK && b == seq {
-                    self.inbox.drain(..=i + 1);
-                    return Ok(false);
+                if i + 1 < self.inbox.len() {
+                    let b = self.inbox[i + 1];
+                    if a == FRAME_ACK && b == seq {
+                        self.inbox.drain(..=i + 1);
+                        return Ok(true);
+                    }
+                    if a == FRAME_NAK && b == seq {
+                        self.inbox.drain(..=i + 1);
+                        return Ok(false);
+                    }
                 }
                 if Self::is_device_opcode(a) {
                     // Defer to poll_events; OSD opcodes need the following data byte.
-                    if a == DEV_MODE_TOGGLE || i + 1 < self.inbox.len() {
-                        i += if a == DEV_MODE_TOGGLE { 1 } else { 2 };
+                    if a == DEV_MODE_TOGGLE {
+                        i += 1;
+                    } else if i + 1 < self.inbox.len() {
+                        i += 2;
                     } else {
                         break;
                     }
@@ -168,5 +156,108 @@ impl BuddySerial {
             }
         }
         anyhow::bail!("no ACK for seq {seq}")
+    }
+}
+
+impl DeviceTransport for BuddySerial {
+    fn poll_events(&mut self) -> Vec<DeviceEvent> {
+        BuddySerial::poll_events(self)
+    }
+
+    fn send_frame(&mut self, cx: u8, cy: u8, flags: u8, payload: &[u8; PAYLOAD_LEN]) -> Result<()> {
+        BuddySerial::send_frame(self, cx, cy, flags, payload)
+    }
+}
+
+fn trim_inbox(inbox: &mut Vec<u8>) {
+    if inbox.len() > INBOX_CAP {
+        let drop = inbox.len() - INBOX_CAP;
+        inbox.drain(..drop);
+    }
+}
+
+/// Parse and remove device→host opcodes from `inbox`. Non-opcode bytes are dropped.
+pub(crate) fn drain_device_events(inbox: &mut Vec<u8>) -> Vec<DeviceEvent> {
+    let mut out = Vec::new();
+    let i = 0;
+    while i < inbox.len() {
+        match inbox[i] {
+            DEV_MODE_TOGGLE => {
+                out.push(DeviceEvent::ModeToggle);
+                inbox.remove(i);
+            }
+            DEV_OSD_BRIGHT => {
+                if i + 1 >= inbox.len() {
+                    break;
+                }
+                let v = inbox[i + 1];
+                inbox.drain(i..=i + 1);
+                out.push(DeviceEvent::Brightness(v.min(6)));
+            }
+            DEV_OSD_SLEEP => {
+                if i + 1 >= inbox.len() {
+                    break;
+                }
+                let v = inbox[i + 1];
+                inbox.drain(i..=i + 1);
+                out.push(DeviceEvent::Sleep(v.min(6)));
+            }
+            _ => {
+                inbox.remove(i);
+            }
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn drain_parses_opcodes_and_drops_garbage() {
+        let mut inbox = vec![
+            0x00,
+            0xFF,
+            DEV_MODE_TOGGLE,
+            0x42,
+            DEV_OSD_BRIGHT,
+            4,
+            DEV_OSD_SLEEP,
+            0,
+            DEV_OSD_BRIGHT,
+            9, // clamped to 6
+        ];
+        let ev = drain_device_events(&mut inbox);
+        assert_eq!(
+            ev,
+            vec![
+                DeviceEvent::ModeToggle,
+                DeviceEvent::Brightness(4),
+                DeviceEvent::Sleep(0),
+                DeviceEvent::Brightness(6),
+            ]
+        );
+        assert!(inbox.is_empty());
+    }
+
+    #[test]
+    fn drain_leaves_partial_osd_opcode() {
+        let mut inbox = vec![0xAA, DEV_OSD_BRIGHT];
+        let ev = drain_device_events(&mut inbox);
+        assert!(ev.is_empty());
+        assert_eq!(inbox, vec![DEV_OSD_BRIGHT]);
+    }
+
+    #[test]
+    fn trim_inbox_keeps_tail() {
+        let mut inbox = vec![0u8; INBOX_CAP + 10];
+        for (i, b) in inbox.iter_mut().enumerate() {
+            *b = (i % 256) as u8;
+        }
+        trim_inbox(&mut inbox);
+        assert_eq!(inbox.len(), INBOX_CAP);
+        assert_eq!(inbox[0], 10u8);
+        assert_eq!(*inbox.last().unwrap(), ((INBOX_CAP + 9) % 256) as u8);
     }
 }
