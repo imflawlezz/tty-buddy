@@ -543,8 +543,8 @@ pub fn write_osd_levels(path: &Path, bright: u8, sleep: u8) -> Result<()> {
                     wrote_sleep = true;
                 }
             }
-            let is_display = trimmed.eq_ignore_ascii_case("[display]")
-                || trimmed.eq_ignore_ascii_case("[osd]");
+            let is_display =
+                trimmed.eq_ignore_ascii_case("[display]") || trimmed.eq_ignore_ascii_case("[osd]");
             in_display = is_display;
             if in_display {
                 saw_display = true;

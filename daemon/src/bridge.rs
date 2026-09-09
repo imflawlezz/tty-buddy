@@ -41,9 +41,14 @@ pub fn run_forever(
     while running.load(Ordering::SeqCst) {
         if let Ok(dev) = resolve_device(settings) {
             eprintln!("device online: {dev}");
-            if let Err(e) =
-                run_session(&dev, settings, buddy_config, fps_override, force_status, &running)
-            {
+            if let Err(e) = run_session(
+                &dev,
+                settings,
+                buddy_config,
+                fps_override,
+                force_status,
+                &running,
+            ) {
                 eprintln!("session ended: {e:#}");
             }
             eprintln!("waiting for device…");
