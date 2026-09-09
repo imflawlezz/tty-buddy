@@ -266,9 +266,21 @@ fn discover_keyboards() -> Vec<(PathBuf, String)> {
     out
 }
 
+/// Linux `EVIOCGRAB` = `_IOW('E', 0x90, int)`.
 fn eviocgrab() -> libc::c_ulong {
-    // EVIOCGRAB = _IOW('E', 0x90, int) on Linux x86_64
-    0x4004_4590
+    // Match linux/ioctl.h: _IOC(dir, type, nr, size) with SIZEBITS=14.
+    const NRBITS: u32 = 8;
+    const TYPEBITS: u32 = 8;
+    const SIZEBITS: u32 = 14;
+    const NRSHIFT: u32 = 0;
+    const TYPESHIFT: u32 = NRSHIFT + NRBITS;
+    const SIZESHIFT: u32 = TYPESHIFT + TYPEBITS;
+    const DIRSHIFT: u32 = SIZESHIFT + SIZEBITS;
+    const WRITE: u32 = 1;
+    ((WRITE as libc::c_ulong) << DIRSHIFT)
+        | ((b'E' as libc::c_ulong) << TYPESHIFT)
+        | ((0x90_u32 as libc::c_ulong) << NRSHIFT)
+        | ((std::mem::size_of::<libc::c_int>() as libc::c_ulong) << SIZESHIFT)
 }
 
 fn set_nonblock(fd: i32) {
@@ -536,5 +548,10 @@ mod tests {
         assert_eq!(keycode_to_bytes(2, true, false), Some(vec![b'!']));
         assert_eq!(keycode_to_bytes(57, false, false), Some(vec![b' ']));
         assert!(keycode_to_bytes(999, false, false).is_none());
+    }
+
+    #[test]
+    fn eviocgrab_matches_linux_iow() {
+        assert_eq!(eviocgrab(), 0x4004_4590);
     }
 }
