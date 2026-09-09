@@ -73,5 +73,7 @@ Service status codes and alert bit masks are defined in `protocol.rs`
 `SEC_SWAP` / `SEC_LOAD` / `SEC_NONE`.
 
 Native firmware tests (`pio test -e native`) and daemon unit tests assert
-sizes and packing invariants — prefer those over re-deriving layouts by
-hand.
+sizes, packing invariants, wire constants (`FLAG_*` / `DEV_*` / ACK/NAK),
+and shared golden vectors for `StatusStyle` bytes plus empty-frame CRC —
+prefer those over re-deriving layouts by hand. Keep both sides’ goldens in
+lockstep when the wire format changes.

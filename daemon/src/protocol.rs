@@ -598,4 +598,221 @@ mod tests {
         assert_eq!(&packed[svc0..svc0 + SVC_NAME_LEN], &[0u8; SVC_NAME_LEN]);
         assert_eq!(packed[svc0 + SVC_NAME_LEN], 0);
     }
+
+    #[test]
+    fn wire_constants_match_firmware() {
+        // Keep in lockstep with firmware/src/protocol.h + status_snap.h.
+        assert_eq!(FRAME_MAGIC, [0xAA, 0x55, 0xA5, 0x5A]);
+        assert_eq!(FRAME_ACK, 0x06);
+        assert_eq!(FRAME_NAK, 0x15);
+        assert_eq!(DEV_MODE_TOGGLE, 0x12);
+        assert_eq!(DEV_OSD_BRIGHT, 0x13);
+        assert_eq!(DEV_OSD_SLEEP, 0x14);
+        assert_eq!(FLAG_CURSOR_VISIBLE, 0x01);
+        assert_eq!(FLAG_CURSOR_ON, 0x02);
+        assert_eq!(FLAG_ACTIVITY, 0x04);
+        assert_eq!(FLAG_STYLE, 0x10);
+        assert_eq!(FLAG_STATUS, 0x20);
+        assert_eq!(FLAG_BYE, 0x80);
+        assert_eq!(COLS, 53);
+        assert_eq!(ROWS, 30);
+        assert_eq!(PAYLOAD_LEN, 4770);
+        assert_eq!(FRAME_LEN, 4780);
+        assert_eq!(STATUS_VER, 13);
+        assert_eq!(STATUS_SNAP_LEN, 4466);
+        assert_eq!(STYLE_LEN, 60);
+        assert_eq!(IFACE_COUNT, 16);
+        assert_eq!(SVC_COUNT, 80);
+        assert_eq!(SVC_NAME_LEN, 40);
+        assert_eq!(ST_F_HAS_TEMP, 0x02);
+        assert_eq!(ST_F_HAS_CPU, 0x20);
+        assert_eq!(ST_F_HAS_MEM, 0x40);
+        assert_eq!(ST_F_HAS_DISK, 0x80);
+        assert_eq!(
+            [
+                ST_SVC_FAILED,
+                ST_SVC_ACTIVE,
+                ST_SVC_DEACTIVATING,
+                ST_SVC_ACTIVATING,
+                ST_SVC_INACTIVE,
+                ST_SVC_MAINTENANCE,
+                ST_SVC_RELOADING
+            ],
+            [0, 1, 2, 3, 4, 5, 6]
+        );
+        assert_eq!(SEC_NONE, 0xFF);
+        assert_eq!([SEC_UPTIME, SEC_SWAP, SEC_LOAD], [1, 2, 3]);
+        assert_eq!(
+            [
+                AL_CPU,
+                AL_MEM,
+                AL_DISK,
+                AL_TEMP,
+                AL_SVC_FAILED,
+                AL_SVC_INACTIVE
+            ],
+            [1, 2, 4, 8, 16, 32]
+        );
+        assert_eq!(
+            [OSD_F_DISMISS_ON_TAP, OSD_F_AUTO_BRIGHT, OSD_F_WAKE_ON_ALERT],
+            [1, 2, 4]
+        );
+    }
+
+    /// Shared byte layout with firmware `test_status_style_pack_golden`.
+    fn golden_style() -> StatusStyle {
+        StatusStyle {
+            label_c: 0x1111,
+            bg_c: 0x2222,
+            host_c: 0x3333,
+            date_c: 0x4444,
+            time_c: 0x5555,
+            level_ok: 0x6666,
+            level_warn: 0x7777,
+            level_crit: 0x8888,
+            hero_cpu_c: 0x9999,
+            hero_mem_c: 0xAAAA,
+            hero_disk_c: 0xBBBB,
+            meter_mode: METER_ON,
+            warn_at: 60,
+            crit_at: 90,
+            sec_left: SEC_UPTIME,
+            sec_right: SEC_LOAD,
+            sec_left_c: 0xCCCC,
+            sec_right_c: 0xDDDD,
+            svc_active: 0x0101,
+            svc_failed: 0x0202,
+            svc_deactivating: 0x0303,
+            svc_activating: 0x0404,
+            svc_reloading: 0x0505,
+            svc_inactive: 0x0606,
+            svc_maintenance: 0x0707,
+            alert_bg_c: 0x0808,
+            alert_fg_c: 0x0909,
+            alert_hold_sec: 30,
+            alert_mask: 0x3F,
+            alert_temp_c: 80,
+            osd_default_bright_pct: 4,
+            osd_sleep_timeout_s: 4,
+            osd_flags: OSD_F_DISMISS_ON_TAP | OSD_F_WAKE_ON_ALERT,
+            osd_auto_day_pct: 5,
+            osd_auto_night_pct: 2,
+            osd_auto_day_hour: 7,
+            osd_auto_night_hour: 21,
+        }
+    }
+
+    #[test]
+    fn status_style_pack_golden() {
+        const GOLDEN: [u8; STYLE_LEN] = [
+            0x11, 0x11, 0x22, 0x22, 0x33, 0x33, 0x44, 0x44, 0x55, 0x55, 0x66, 0x66, 0x77, 0x77,
+            0x88, 0x88, 0x99, 0x99, 0xAA, 0xAA, 0xBB, 0xBB, 0x01, 0x3C, 0x5A, 0x01, 0x03, 0xCC,
+            0xCC, 0xDD, 0xDD, 0x01, 0x01, 0x02, 0x02, 0x03, 0x03, 0x04, 0x04, 0x05, 0x05, 0x06,
+            0x06, 0x07, 0x07, 0x08, 0x08, 0x09, 0x09, 0x1E, 0x3F, 0x50, 0x04, 0x04, 0x00, 0x05,
+            0x05, 0x02, 0x07, 0x15,
+        ];
+        assert_eq!(golden_style().pack(), GOLDEN);
+    }
+
+    #[test]
+    fn status_snap_header_golden() {
+        let mut snap = StatusSnap {
+            flags: ST_F_HAS_CPU | ST_F_HAS_MEM | ST_F_HAS_DISK,
+            style: golden_style(),
+            hostname: "buddy".into(),
+            date: "09-09-2026".into(),
+            time: "12:00:00".into(),
+            load_x100: [100, 200, 300],
+            uptime_sec: 3600,
+            cpu_pct: 11,
+            mem_pct: 22,
+            disk_pct: 33,
+            swap_pct: 44,
+            mem_used_mb: 1024,
+            mem_total_mb: 2048,
+            disk_used_mb: 4096,
+            disk_total_mb: 8192,
+            swap_used_mb: 1,
+            swap_total_mb: 2,
+            cpu_temp_c10: 425,
+            ..Default::default()
+        };
+        snap.ifaces.push(StatusIface {
+            name: "eth0".into(),
+            ip: "10.0.0.1".into(),
+            rx_bps: 1000,
+            tx_bps: 2000,
+        });
+        snap.services.push(StatusSvc {
+            name: "ssh".into(),
+            status: ST_SVC_ACTIVE,
+        });
+
+        let packed = snap.pack();
+        assert_eq!(&packed[0..4], b"TBST");
+        assert_eq!(packed[4], STATUS_VER);
+        assert_eq!(packed[5], ST_F_HAS_CPU | ST_F_HAS_MEM | ST_F_HAS_DISK);
+        assert_eq!(&packed[6..6 + STYLE_LEN], &golden_style().pack());
+
+        let style_end = 6 + STYLE_LEN;
+        assert_eq!(&packed[style_end..style_end + 5], b"buddy");
+        assert!(packed[style_end + 5..style_end + 24]
+            .iter()
+            .all(|&b| b == 0));
+
+        let date_off = style_end + 24;
+        assert_eq!(&packed[date_off..date_off + 10], b"09-09-2026");
+        let time_off = date_off + 20;
+        assert_eq!(&packed[time_off..time_off + 8], b"12:00:00");
+
+        let load_off = time_off + 12;
+        assert_eq!(
+            u16::from_le_bytes([packed[load_off], packed[load_off + 1]]),
+            100
+        );
+        let up_off = load_off + 6;
+        assert_eq!(
+            u32::from_le_bytes(packed[up_off..up_off + 4].try_into().unwrap()),
+            3600
+        );
+        assert_eq!(&packed[up_off + 4..up_off + 8], &[11u8, 22, 33, 44]);
+
+        let mem_off = up_off + 8;
+        assert_eq!(
+            u32::from_le_bytes(packed[mem_off..mem_off + 4].try_into().unwrap()),
+            1024
+        );
+
+        let iface0 = 6 + STYLE_LEN + 24 + 20 + 12 + 6 + 4 + 4 + 24 + 2;
+        assert_eq!(&packed[iface0..iface0 + 4], b"eth0");
+        assert_eq!(&packed[iface0 + 16..iface0 + 24], b"10.0.0.1");
+        assert_eq!(
+            u32::from_le_bytes(packed[iface0 + 56..iface0 + 60].try_into().unwrap()),
+            1000
+        );
+        assert_eq!(
+            u32::from_le_bytes(packed[iface0 + 60..iface0 + 64].try_into().unwrap()),
+            2000
+        );
+
+        let svc0 = iface0 + IFACE_COUNT * 64;
+        assert_eq!(&packed[svc0..svc0 + 3], b"ssh");
+        assert_eq!(packed[svc0 + SVC_NAME_LEN], ST_SVC_ACTIVE);
+    }
+
+    #[test]
+    fn status_frame_crc_golden() {
+        let payload = [0u8; PAYLOAD_LEN];
+        let frame = build_frame(1, 0, 0, FLAG_STATUS | FLAG_STYLE, &payload);
+        assert_eq!(frame.len(), FRAME_LEN);
+        assert_eq!(&frame[0..4], &FRAME_MAGIC);
+        assert_eq!(frame[7], FLAG_STATUS | FLAG_STYLE);
+        let mut crc_buf = vec![1u8, 0, 0, FLAG_STATUS | FLAG_STYLE];
+        crc_buf.extend_from_slice(&payload);
+        let crc = crc16_ccitt(&crc_buf);
+        assert_eq!(frame[FRAME_LEN - 2], (crc >> 8) as u8);
+        assert_eq!(frame[FRAME_LEN - 1], (crc & 0xFF) as u8);
+        // CRC over hdr+empty payload; must match firmware `test_status_frame_crc_golden`.
+        assert_eq!(crc, 0x9D4D);
+    }
 }
