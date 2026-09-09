@@ -241,6 +241,9 @@ pub(crate) fn parse_status_config_from_str(text: &str) -> StatusUiConfig {
         if let Some(v) = hero.get("crit_at") {
             st.crit_at = v.parse().unwrap_or(90);
         }
+        if st.warn_at > st.crit_at {
+            std::mem::swap(&mut st.warn_at, &mut st.crit_at);
+        }
         if let Some(v) = hero.get("disk_mount") {
             if !v.is_empty() {
                 cfg.disk_mount = v.clone();
@@ -948,5 +951,12 @@ fps = 12
         assert!(!cfg.startup_status);
         assert!(!cfg.keyboard_opens_terminal);
         assert_eq!(cfg.fps, 8.0);
+    }
+
+    #[test]
+    fn normalizes_warn_and_crit_order() {
+        let cfg = parse_status_config_from_str("[hero]\nwarn_at = 95\ncrit_at = 60\n");
+        assert_eq!(cfg.style.warn_at, 60);
+        assert_eq!(cfg.style.crit_at, 95);
     }
 }
