@@ -1,52 +1,258 @@
 # tty-buddy
 
-ESP32-C3 + ST7789 display buddy. Host daemon is Rust.
+A small status / console buddy for a Linux box: an **ESP32-C3** driving an
+**ST7789 320×240** panel, plus a **Rust host daemon**.
+
+**What it is for.**
+
+Glance at host health without opening a terminal, or use the panel as a tiny
+local console. Typical home-lab / desk use: CPU, memory, disk, network,
+systemd units, and alerts on one side; a login shell on the other.
+
+**What it does.**
+
+- **Status mode** — live metrics on the LCD (hostname, clock, CPU / MEM /
+  DISK, secondary fields, interfaces, services, optional alert strip).
+- **Terminal mode** — 53×30 VT mirror of a PTY for a configured
+  `shell_user`. A USB keyboard on the **host** is grabbed into that console.
+
+The device has one push button for basic device controls. Short press opens
+the OSD, or moves to the next row while it is open. Long press changes the
+selected setting, or toggles mode when the OSD is closed.
+
+The daemon talks to the board over USB-Serial/JTAG (`303a:1001`).
+
+**Supported platforms**
+
+- **Device** — ESP32-C3 SuperMini (USB-Serial/JTAG) with ST7789 **320×240**.
+  Other C3 boards should work as long as the pinout matches.
+- **Daemon** — Linux **amd64** and **arm64** (systemd).
+
+Version: `Unreleased`
+License: [MIT](LICENSE)
+Changes: [CHANGELOG.md](CHANGELOG.md)
 
 | Path | Contents |
 |------|----------|
-| [`firmware/`](firmware/) | ESP32 firmware (PlatformIO) |
-| [`daemon/`](daemon/) | Rust host daemon + packaging |
-| [`hardware/`](hardware/) | Wiring / CAD |
+| [`firmware/`](firmware/) | Device firmware (PlatformIO) |
+| [`daemon/`](daemon/) | Host daemon + packaging |
+| [`hardware/`](hardware/) | Schematic, wiring, enclosure |
+| [`docs/`](docs/) | Flashing, daemon lifecycle, config, architecture |
 
-## What it does
+---
 
-- **Status mode** (default): live host metrics → LCD (`buddy.config`)
-- **Console mode**: Linux PTY for `shell_user`
-  - USB keyboard on the **server** is grabbed into that console
-  - Screen is mirrored to the ESP (53×30 VT)
+## Getting started
 
-ESP32-C3 has no USB-host keyboard port — keyboard plugs into the Linux box.
+**What you need**
 
-**Button:** tap opens OSD (Mode / Bright / Sleep); long-press toggles mode when idle, or cycles the selected setting when OSD is open. Brightness and sleep sync with `[display]` in `buddy.config` (and NVS offline).
+- Wired ESP32-C3 + ST7789 ([`hardware/wiring.md`](hardware/wiring.md))
+- Merged factory firmware: `tty-buddy-firmware-<version>.bin`
+- Daemon package (`.deb` or tarball) from a [GitHub Release](https://github.com/imflawlezz/tty-buddy/releases) or `make release`
+- Linux host for the daemon (amd64 or arm64)
 
-## Quick start
+### Flash the board
 
-Wire the board ([`hardware/wiring.md`](hardware/wiring.md)), then:
+#### In the browser
 
-1. Flash firmware (merged factory image at `0x0` — not the app-only `.pio` bin):
+Chrome or Edge **89+** (Web Serial). Firefox and Safari are not supported.
+Use HTTPS pages (the hosted tools already are).
 
-   ```bash
-   make firmware
-   cd firmware && ./scripts/flash.sh dist/tty-buddy-firmware.bin
-   ```
+| Tool | URL |
+|------|-----|
+| Espressif esptool-js | [espressif.github.io/esptool-js](https://espressif.github.io/esptool-js/) |
+| Adafruit WebSerial ESPTool | [adafruit.github.io/Adafruit_WebSerial_ESPTool](https://adafruit.github.io/Adafruit_WebSerial_ESPTool/) |
 
-2. Install daemon tarball: `sudo ./install.sh` (binds to the user who ran sudo)
-3. Plug in (or replug) the ESP → `/dev/tty-buddy` via udev
+Connect the board, choose the serial port, select the factory `.bin`, flash
+at offset **0x0** (full image). Steps and troubleshooting:
+[`docs/guides/flashing.md`](docs/guides/flashing.md).
 
-```bash
-systemctl status tty-buddy
-```
-
-Several boards on one host: `tty-buddy setup --config /etc/tty-buddy/daemon.toml`
-
-## Build
-
-Version: [`daemon/Cargo.toml`](daemon/Cargo.toml). Notes: [`CHANGELOG.md`](CHANGELOG.md).
+If a daemon is already running, free the serial port before flashing:
 
 ```bash
-make firmware   # dist/tty-buddy-firmware-<ver>.bin
-make daemon     # dist/tty-buddy-<ver>-x86_64-linux.tar.gz
-make release    # both
+sudo systemctl stop 'tty-buddy@*'
 ```
 
-Tag `vX.Y.Z` matching Cargo.toml to open a draft GitHub Release.
+#### On the machine (board on USB):
+
+```bash
+# from a release artifact or make firmware → dist/
+cd firmware
+./scripts/flash.sh /path/to/tty-buddy-firmware-<version>.bin
+```
+
+Optional port override:
+
+```bash
+./scripts/flash.sh --port /dev/ttyACM0 /path/to/tty-buddy-firmware-<version>.bin
+```
+
+No path argument runs a PlatformIO upload at the usual offsets. `flash.sh`
+prefers `/dev/tty-buddy`, then Espressif `303a:1001`.
+
+### Install / update the daemon
+
+Pick one packaging form. Both install the binary, udev rule
+(`/dev/tty-buddy`), systemd template `tty-buddy@<user>`, set `shell_user`,
+and add the user to `dialout` + `input` groups. Replug USB if the symlink is
+missing; a new login may be needed for group membership to take effect.
+
+Instance user: `TTY_BUDDY_USER`, else `SUDO_USER` (non-root). Same for
+`.deb` postinst and tarball `install.sh`. Detail:
+[`docs/guides/daemon.md`](docs/guides/daemon.md).
+
+#### `.deb` (Debian / Ubuntu)
+
+Same command installs or upgrades. Use the package that matches the host
+arch:
+
+```bash
+sudo apt-get install -y ./tty-buddy_<version>_amd64.deb
+```
+
+```bash
+sudo apt-get install -y ./tty-buddy_<version>_arm64.deb
+```
+
+Check the instance unit (username = the account that ran install /
+`SUDO_USER`):
+
+```bash
+systemctl status tty-buddy@$USER
+```
+
+#### Tarball (portable)
+
+Unpack and run `install.sh` as root. On upgrade it replaces the binary,
+unit, udev rule, and helpers; existing `daemon.toml` / `buddy.config` are
+left alone. First install copies defaults when those files are missing.
+
+```bash
+# change `x86_64` to `aarch64` for arm64 tarball
+tar xzf tty-buddy-<version>-x86_64-linux.tar.gz
+cd tty-buddy-<version>-x86_64-linux
+sudo ./install.sh
+```
+
+Override the instance user when needed:
+
+```bash
+# replace alice with real local username
+sudo TTY_BUDDY_USER=alice ./install.sh
+```
+
+If the unit was already running, restart it after upgrade:
+
+```bash
+sudo systemctl restart tty-buddy@$USER
+```
+
+Optional check:
+
+```bash
+systemctl status tty-buddy@$USER
+```
+
+#### Several boards on one host
+
+Pin a specific USB device (path / vid / pid / serial) and console user into
+`daemon.toml`, then restart:
+
+```bash
+tty-buddy setup --config /etc/tty-buddy/daemon.toml
+sudo systemctl restart tty-buddy@$USER
+```
+
+### Configuration
+
+| File | Role |
+|------|------|
+| `/etc/tty-buddy/daemon.toml` | Device bind + `shell_user` |
+| `/etc/tty-buddy/buddy.config` | Panel UX (behavior, layout, display, …) |
+
+```ini
+# Example of buddy.config
+[behavior]
+startup_mode = status
+keyboard_opens_terminal = true
+fps = 10
+
+[globals]
+label_color = #888888
+background_color = #000000
+
+[header]
+hostname_color = #FFFFFF
+date_color = #888888
+time_color = #FFFFFF
+date_format = %d-%m-%Y
+time_format = %H:%M:%S
+
+# ...
+```
+
+Full config reference: [`docs/reference/configuration.md`](docs/reference/configuration.md).
+
+### Uninstall
+
+Pick one command, depending on whether you want to keep the configs for
+future reinstalls. More detail: [`docs/guides/daemon.md`](docs/guides/daemon.md).
+
+#### `.deb`
+
+```bash
+sudo apt-get remove tty-buddy
+# or purge to remove configs as well
+sudo apt-get purge tty-buddy
+```
+
+#### Tarball
+
+```bash
+# remove binary / unit / udev, keep configs
+sudo /usr/lib/tty-buddy/uninstall.sh
+
+# remove binary / unit / udev, delete /etc/tty-buddy
+sudo /usr/lib/tty-buddy/uninstall.sh --purge
+```
+
+---
+
+## Build and development
+
+**Tools:** PlatformIO (`pio`) for firmware; Rust stable + `pkg-config` /
+`libudev-dev` for the daemon on Linux. On macOS, `.deb` builds use Docker
+when `dpkg-deb` is missing.
+
+Release / package targets (version from `daemon/Cargo.toml` → `dist/`):
+
+```bash
+make help          # list targets
+make version       # print version string
+make firmware      # merged factory .bin
+make daemon        # .deb + tarball (this host arch)
+make daemon-all    # .deb + tarball for amd64 and arm64
+make release       # firmware + daemon + checksums.txt
+make release-all   # firmware + daemon-all + checksums.txt
+make checksums     # SHA-256 for artifacts already in dist/
+make clean         # remove dist/ and local build outputs
+```
+
+Checks used in CI:
+
+```bash
+cd daemon && cargo fmt --all -- --check && cargo clippy --all-targets -- -D warnings && cargo test
+```
+
+```bash
+cd firmware && pio test -e native && pio run -e esp32-c3-supermini
+```
+
+Maintainer detail: [`docs/guides/development.md`](docs/guides/development.md).
+
+- CI: [`.github/workflows/ci.yml`](.github/workflows/ci.yml)
+- Draft GitHub Releases on `v*` tags (tag must match Cargo version):
+  [`.github/workflows/release.yml`](.github/workflows/release.yml)
+
+---
+
+Made with ❤️ by [imflawlezz](https://github.com/imflawlezz)
