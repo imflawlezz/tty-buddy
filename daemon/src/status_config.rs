@@ -140,10 +140,10 @@ pub(crate) fn parse_status_config_from_str(text: &str) -> StatusUiConfig {
         cfg.behavior_from_file = true;
         if let Some(v) = b.get("startup_mode").or_else(|| b.get("start_in_status")) {
             let t = v.trim().to_ascii_lowercase();
-            cfg.startup_status = match t.as_str() {
-                "terminal" | "console" | "tty" | "false" | "0" | "no" | "off" => false,
-                _ => true,
-            };
+            cfg.startup_status = !matches!(
+                t.as_str(),
+                "terminal" | "console" | "tty" | "false" | "0" | "no" | "off"
+            );
         }
         if let Some(v) = b.get("keyboard_opens_terminal") {
             cfg.keyboard_opens_terminal = as_bool(v, true);
