@@ -10,14 +10,14 @@ ESP32-C3 + ST7789 display buddy. Host daemon is Rust.
 
 ## What it does
 
-- **Status mode** (default): live host metrics → LCD (`status.config`)
+- **Status mode** (default): live host metrics → LCD (`buddy.config`)
 - **Console mode**: Linux PTY for `shell_user`
   - USB keyboard on the **server** is grabbed into that console
   - Screen is mirrored to the ESP (53×30 VT)
 
 ESP32-C3 has no USB-host keyboard port — keyboard plugs into the Linux box.
 
-**Button:** tap opens OSD (Mode / Bright / Sleep); long-press toggles mode when idle, or cycles the selected setting when OSD is open. Brightness and sleep sync with `[osd]` in `status.config` (and NVS offline).
+**Button:** tap opens OSD (Mode / Bright / Sleep); long-press toggles mode when idle, or cycles the selected setting when OSD is open. Brightness and sleep sync with `[display]` in `buddy.config` (and NVS offline).
 
 ## Quick start
 
