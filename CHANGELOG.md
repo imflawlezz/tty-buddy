@@ -18,7 +18,7 @@ host daemon over USB-Serial/JTAG.
   meters with warn/crit colours, optional secondary fields (uptime, load,
   swap), network interfaces, systemd service list, and a bottom alert strip
   (CPU/MEM/DISK/temp/service)
-- **Terminal mode**: 53×30 VT mirror of a login PTY for `shell_user`, with
+- **Terminal mode**: 53×30 VT mirror of a login shell in a PTY for `shell_user`, with
   box/block/Braille glyphs; USB keyboard on the host is watched in status
   (optional open-to-terminal) and grabbed into the console in terminal mode
 - **On-device OSD** (one button): toggle mode, brightness steps or auto
@@ -29,7 +29,7 @@ host daemon over USB-Serial/JTAG.
   filter, alerts, and `[display]` (legacy `status.config` / `[osd]` still
   accepted; install can migrate the filename)
 - **`daemon.toml`** host settings: device path / USB id / serial,
-  `buddy_config` path, and `shell_user`
+  `buddy_config` path, and `shell_user` for the daemon runtime user
 - **Linux packaging** for amd64 and arm64: `.deb` and portable tarballs,
   `tty-buddy@<user>` systemd unit, udev rule for `/dev/tty-buddy`,
   `install.sh` / `uninstall.sh` (`--purge`); install binds groups and

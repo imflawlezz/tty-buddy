@@ -25,7 +25,7 @@ Implementation: [`daemon/src/settings.rs`](../../daemon/src/settings.rs), [`daem
 | Change | Effect |
 |--------|--------|
 | Any `daemon.toml` key | Restart `tty-buddy@…` (or the process) |
-| `buddy.config` mtime | Re-parse; push `FLAG_STYLE`; update `fps` / keyboard-watch for the live session |
+| `buddy.config` mtime | Re-parse; push `FLAG_STYLE`; update `fps`. Keyboard-watch policy is reapplied only while already in **status** mode |
 | `startup_mode` while running | Stored in memory only — **does not** flip status ↔ terminal mid-session |
 | CLI `--status` / `--terminal` | Applied once when the session starts; not re-applied on buddy reload |
 | CLI `--fps` | Applied at session start and again on every buddy reload |
@@ -45,8 +45,8 @@ TOML. Search order when `--config` is omitted ([`settings_path`](../../daemon/sr
 3. `$XDG_CONFIG_HOME/tty-buddy/daemon.toml` (via `dirs::config_dir`)
 4. else `/etc/tty-buddy/daemon.toml`
 
-Missing or invalid file → `DaemonSettings::default()` (parse errors are
-silent).
+Missing file → `DaemonSettings::default()`. Invalid or unreadable
+`daemon.toml` aborts startup / setup instead of silently falling back.
 
 ### Host keys
 
@@ -57,7 +57,7 @@ silent).
 | `pid` | u16? | `0x1001` (`4097`) | USB product (Espressif USB-Serial/JTAG) |
 | `serial` | string? | unset | Disambiguate when several boards share vid/pid |
 | `buddy_config` | path? | `/etc/tty-buddy/buddy.config` | Panel INI. **Alias:** `status_config` |
-| `shell_user` | string? | unset | Account for `/bin/login -f` on the PTY |
+| `shell_user` | string? | unset | Login shell identity inside the PTY; must match the daemon runtime user / systemd instance |
 
 If a **present** file omits `buddy_config`, serde yields `None` and the
 [panel path resolver](#panel-file-resolution) searches the usual candidates (unlike `Default`, which
@@ -72,6 +72,8 @@ sets `/etc/tty-buddy/buddy.config`).
 
 `tty-buddy devices` lists candidates. `tty-buddy setup` writes host fields
 only (see [CLI](#cli)).
+
+For stable multi-board setups, set `serial` as well as `device_path`/USB ids.
 
 ### Legacy behaviour keys (host file)
 
@@ -131,11 +133,16 @@ keys.
 | Key | Alias | Default | Semantics |
 |-----|-------|---------|-------------|
 | `startup_mode` | `start_in_status` | status | Terminal if value is `terminal`, `console`, `tty`, `false`, `0`, `no`, or `off` (case-insensitive). **Any other string → status** |
-| `keyboard_opens_terminal` | — | `true` | In status mode, watch keyboards without grab; activity opens terminal and sets activity/wake |
+| `keyboard_opens_terminal` | — | `true` | In status mode, watch matching host keyboards without grab; any activity opens terminal and sets activity/wake |
 | `fps` | — | `10` | Terminal frame cap; parsed value `.max(1.0)` |
 
-Packaging may prepend a default `[behavior]` block if missing (
-[daemon lifecycle](../guides/daemon.md)).
+`keyboard_opens_terminal = true` is convenient on a dedicated host console,
+but it is aggressive on a desktop: typing on a watched keyboard can pull the
+panel into terminal mode. Set it to `false` to disable status-mode keyboard
+watch entirely.
+
+Packaging may prepend a default `[behavior]` block if missing
+([daemon lifecycle](../guides/daemon.md)).
 
 ---
 
@@ -171,8 +178,8 @@ CPU / MEM / DISK meters and thresholds.
 | `disk_color` | `disk` | white if empty |
 | `disk_mount` | — | `/` (non-empty only) |
 | `meter_mode` | — | bool; **if the section is present and the key is omitted, treated as `true`** |
-| `warn_at` | — | `60` (`u8`; parse fail → 60; no clamp) |
-| `crit_at` | — | `90` |
+| `warn_at` | — | `60` (`u8`; parse fail → 60; no clamp). If `warn_at > crit_at` after parse, the two values are **swapped** |
+| `crit_at` | — | `90` (same swap rule as `warn_at`) |
 | `level_ok_color` | `level_ok` | `#33AA33` |
 | `level_warn_color` | `level_warn` | `#CCCC33` |
 | `level_crit_color` | `level_crit` | `#CC3333` |
@@ -205,7 +212,8 @@ onto the wire.
 | `auto`, `any`, `both` | Prefer IPv4; else non-`fe80:` IPv6; else link-local |
 | anything else (incl. `v4`, `4`, `ipv4`, garbage) | IPv4 |
 
-Empty section / no keys → no interface rows.
+Empty section / no keys → no interface rows. The shipped template leaves this
+section empty on purpose; add only the interfaces you want shown.
 
 ---
 
@@ -270,7 +278,16 @@ merged with the previous default bitset).
 | `auto_night_level` | `auto_night_pct` | same |
 | `auto_day_hour` / `auto_night_hour` | — | local hour 0–23 (`.min(23)`) |
 | `dismiss_alert_on_tap` | — | default `true` — short press dismisses alert instead of only opening OSD |
-| `wake_on_alert` | — | default `true` — wake from sleep for alerts; hold sleep from arming while an alert is up. **OSD idle-close is independent** |
+| `wake_on_alert` | — | default `true` — see below |
+
+When `wake_on_alert` is true:
+
+- an active status alert wakes the panel if it was asleep
+- while the alert is up, the sleep timeout does **not** arm
+- when the alert clears, the sleep timer restarts from that moment
+- OSD idle auto-close is separate and still runs during an alert
+
+When false, alerts do not wake sleep or postpone it.
 
 #### Brightness and sleep levels
 
@@ -353,6 +370,11 @@ tty-buddy probe [--buddy-config PATH]
 | `probe` | Load panel config, sample metrics twice, print summary — **no serial open** |
 
 Systemd: `ExecStart=/usr/bin/tty-buddy run --config /etc/tty-buddy/daemon.toml`.
+
+`shell_user` is not a uid switch. The daemon already runs as `tty-buddy@<user>`
+and spawns that same user’s login shell (`$SHELL -l`, home/env from
+`/etc/passwd`) inside the PTY. A mismatched `shell_user` causes startup to
+fail.
 
 ---
 

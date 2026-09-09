@@ -100,6 +100,9 @@ Instance user: `TTY_BUDDY_USER`, else `SUDO_USER` (non-root). Same for
 `.deb` postinst and tarball `install.sh`. Detail:
 [`docs/guides/daemon.md`](docs/guides/daemon.md).
 
+`shell_user` must match the user running `tty-buddy@<user>`. The daemon does
+not switch users at runtime; it starts that user’s login shell inside the PTY.
+
 #### `.deb` (Debian / Ubuntu)
 
 Same command installs or upgrades. Use the package that matches the host
@@ -162,6 +165,21 @@ tty-buddy setup --config /etc/tty-buddy/daemon.toml
 sudo systemctl restart tty-buddy@$USER
 ```
 
+### Keyboard capture warning
+
+With `keyboard_opens_terminal = true`, typing on a watched host keyboard can
+open terminal mode from status mode. While terminal mode is active, tty-buddy
+always grabs matching keyboards for the console (EVIOCGRAB), even if
+`keyboard_opens_terminal` is `false`.
+
+On a normal desktop, set auto-open to `false` unless the keyboard is dedicated
+to tty-buddy:
+
+```ini
+[behavior]
+keyboard_opens_terminal = false
+```
+
 ### Configuration
 
 | File | Role |
@@ -170,10 +188,11 @@ sudo systemctl restart tty-buddy@$USER
 | `/etc/tty-buddy/buddy.config` | Panel UX (behavior, layout, display, …) |
 
 ```ini
-# Example of buddy.config
+# Fragment of buddy.config (shipped default keeps keyboard_opens_terminal =
+# true; on a desktop, prefer false — see warning above)
 [behavior]
 startup_mode = status
-keyboard_opens_terminal = true
+keyboard_opens_terminal = false
 fps = 10
 
 [globals]
@@ -190,7 +209,8 @@ time_format = %H:%M:%S
 # ...
 ```
 
-Full config reference: [`docs/reference/configuration.md`](docs/reference/configuration.md).
+Full config reference (including display / `wake_on_alert` sleep policy):
+[`docs/reference/configuration.md`](docs/reference/configuration.md).
 
 ### Uninstall
 

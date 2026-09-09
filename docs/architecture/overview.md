@@ -33,9 +33,12 @@ with `FLAG_STATUS`. Optionally watch keyboards; activity can switch to
 terminal and set `FLAG_ACTIVITY` (wake). Style (`FLAG_STYLE`) is pushed when
 config/metrics style inputs change.
 
-**Terminal mode.** Login PTY as `shell_user`, grab keyboards, push the cell
-payload at up to `fps` (keystrokes force an immediate frame). Cursor flags
-and activity wake the panel when needed.
+**Terminal mode.** Spawn the systemd instance user’s login shell inside a
+PTY and push the cell payload at up to `fps` (keystrokes force an immediate
+frame). Matching host keyboards are **always EVIOCGRAB’d** while terminal
+mode is active (device toggle or keyboard activity), even when
+`keyboard_opens_terminal = false`. Cursor flags and activity wake the panel
+when needed.
 
 **Config.** `daemon.toml` is host/install (device bind, `shell_user`, path
 to panel config). `buddy.config` is panel UX and behaviour; mtime reload
@@ -58,8 +61,9 @@ protocol unit tests only.
 **Button.** Short press: open OSD or advance the highlighted row; may
 dismiss an alert if configured. Long press: change the selected OSD value,
 or toggle mode when the OSD is closed. Idle auto-close for OSD is timed
-separately from sleep. `wake_on_alert` can wake and hold sleep off while an
-alert is active; it does not freeze the OSD idle timer.
+separately from sleep. With `wake_on_alert`, an active alert wakes the panel
+and postpones sleep until the alert clears (timer restarts then); OSD idle
+auto-close still runs.
 
 **Factory image.** Post-build `merge_factory.py` merges bootloader,
 partitions, boot_app0, and app into `tty-buddy-firmware-<ver>.bin` (version

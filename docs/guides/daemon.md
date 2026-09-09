@@ -30,7 +30,7 @@ device disappears.
 Install must bind to a **non-root** account. That account is:
 
 - the systemd instance (`tty-buddy@alice`)
-- `shell_user` in `daemon.toml` (console PTY)
+- `shell_user` in `daemon.toml` (login shell identity inside the PTY)
 - owner of `buddy.config` (so the user can edit it without root)
 - added to `dialout` and `input`
 
@@ -49,12 +49,35 @@ sudo TTY_BUDDY_USER=alice ./install.sh
 
 - migrates legacy `status.config` → `buddy.config` when needed
 - prepends a default `[behavior]` block if missing
-- sets `shell_user` when it is missing or still `REPLACE_ME` / `dih`
+- sets `shell_user` when it is missing or still `REPLACE_ME`
 - disables a leftover non-template `tty-buddy.service` if present
 - `enable --now tty-buddy@<user>`
 
 New `dialout`/`input` membership often requires a new login session before
 the daemon can open the keyboard or serial node without permission errors.
+
+`shell_user` is not a separate login or PAM handoff. The daemon runs as the
+systemd instance user and spawns that same user’s login shell inside the PTY.
+A mismatched `shell_user` now aborts startup instead of pretending to switch
+users.
+
+## Keyboard capture warning
+
+By default, `keyboard_opens_terminal = true` in `buddy.config`.
+
+- In **status mode**, the daemon watches matching host keyboards without grab.
+  Any watched key activity can switch the panel into terminal mode.
+- In **terminal mode**, the daemon always uses **EVIOCGRAB** on matching
+  keyboard devices (even if `keyboard_opens_terminal = false`), which can
+  steal the desktop keyboard while the session is active.
+
+Use this only on a dedicated machine or a deliberately chosen keyboard. To
+disable status-mode auto-open entirely:
+
+```ini
+[behavior]
+keyboard_opens_terminal = false
+```
 
 ## Install / upgrade — `.deb`
 
