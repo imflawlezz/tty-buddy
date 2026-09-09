@@ -1,10 +1,6 @@
 """After build: merge bootloader + partitions + app into dist/ (flash @ 0x0).
 
-Writes:
-  dist/tty-buddy-firmware.bin
-  dist/tty-buddy-firmware-<version>.bin
-
-Version is read from daemon/Cargo.toml (single source of truth).
+Writes dist/tty-buddy-firmware-<version>.bin (version from daemon/Cargo.toml).
 """
 
 Import("env")
@@ -72,7 +68,6 @@ def merge_factory(source, target, env):  # noqa: ARG001
     boot0 = _boot_app0()
     version = _version()
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    out_plain = OUT_DIR / "tty-buddy-firmware.bin"
     out_ver = OUT_DIR / f"tty-buddy-firmware-{version}.bin"
 
     cmd = [
@@ -81,7 +76,7 @@ def merge_factory(source, target, env):  # noqa: ARG001
         "esp32c3",
         "merge_bin",
         "-o",
-        str(out_plain),
+        str(out_ver),
         "--flash_mode",
         "dio",
         "--flash_freq",
@@ -99,9 +94,8 @@ def merge_factory(source, target, env):  # noqa: ARG001
     ]
     print(f"[merge_factory] {' '.join(cmd)}")
     subprocess.check_call(cmd)
-    shutil.copyfile(out_plain, out_ver)
-    size = out_plain.stat().st_size
-    print(f"[merge_factory] wrote {out_plain} and {out_ver.name} ({size} bytes) — flash at 0x0")
+    size = out_ver.stat().st_size
+    print(f"[merge_factory] wrote {out_ver} ({size} bytes) — flash at 0x0")
 
 
 env.AddPostAction("$BUILD_DIR/${PROGNAME}.bin", merge_factory)

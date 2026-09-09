@@ -1,7 +1,7 @@
 """Inject TTY_BUDDY_VERSION + build date from daemon/Cargo.toml into the firmware build."""
 
 Import("env")
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 import re
 
@@ -12,7 +12,7 @@ if cargo.is_file():
     if m:
         ver = m.group(1)
 
-# DD.MM.YY in local time.
+# FW label date: DD.MM.YY (local).
 build_date = datetime.now().astimezone().strftime("%d.%m.%y")
 label = f"{ver}/{build_date}"
 
