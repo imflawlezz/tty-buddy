@@ -322,7 +322,8 @@ fn resolve_shell(user: Option<&str>) -> (String, String, String) {
     let uname = user
         .map(str::to_string)
         .or_else(|| std::env::var("USER").ok())
-        .unwrap_or_else(|| "dih".into());
+        .or_else(|| std::env::var("LOGNAME").ok())
+        .unwrap_or_else(current_username);
 
     if let Ok(ents) = std::fs::read_to_string("/etc/passwd") {
         for line in ents.lines() {
@@ -347,6 +348,23 @@ fn resolve_shell(user: Option<&str>) -> (String, String, String) {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".into());
     let home = std::env::var("HOME").unwrap_or_else(|_| format!("/home/{uname}"));
     (shell, home, uname)
+}
+
+fn current_username() -> String {
+    // Fallback when shell_user / USER / LOGNAME are unset.
+    let uid = unsafe { libc::geteuid() };
+    unsafe {
+        let pw = libc::getpwuid(uid);
+        if !pw.is_null() {
+            let name = std::ffi::CStr::from_ptr((*pw).pw_name);
+            if let Ok(s) = name.to_str() {
+                if !s.is_empty() {
+                    return s.to_string();
+                }
+            }
+        }
+    }
+    "nobody".into()
 }
 
 #[cfg(test)]

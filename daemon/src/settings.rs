@@ -111,7 +111,7 @@ mod tests {
             device_path: Some("/dev/tty-buddy".into()),
             fps: 12.5,
             start_in_status: false,
-            shell_user: Some("dih".into()),
+            shell_user: Some("alice".into()),
             ..Default::default()
         };
         s.save(&path).unwrap();
@@ -120,7 +120,7 @@ mod tests {
         assert_eq!(loaded.device_path.as_deref(), Some("/dev/tty-buddy"));
         assert_eq!(loaded.fps, 12.5);
         assert!(!loaded.start_in_status);
-        assert_eq!(loaded.shell_user.as_deref(), Some("dih"));
+        assert_eq!(loaded.shell_user.as_deref(), Some("alice"));
         assert_eq!(loaded.vid, Some(0x303A));
     }
 
