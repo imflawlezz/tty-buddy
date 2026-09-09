@@ -28,7 +28,7 @@ The daemon talks to the board over USB-Serial/JTAG (`303a:1001`).
   Other C3 boards should work as long as the pinout matches.
 - **Daemon** — Linux **amd64** and **arm64** (systemd).
 
-Version: `Unreleased`
+Version: `1.0.0`
 License: [MIT](LICENSE)
 Changes: [CHANGELOG.md](CHANGELOG.md)
 
