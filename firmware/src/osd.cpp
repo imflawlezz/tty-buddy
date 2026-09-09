@@ -582,12 +582,11 @@ void tick(uint32_t now) {
   syncFromStyle();
   recomputeAutoBrightness();
 
-  // Wake (and hold awake) while a status alert is showing.
   const bool alert_up = g_term->statusUiActive() && statusGuiAlertActive();
-  if (g_wake_on_alert_cfg && alert_up) {
-    if (g_asleep || !g_alert_was_up)
+  if (g_wake_on_alert_cfg) {
+    if (alert_up && g_asleep)
       wake(now);
-    else
+    else if (g_alert_was_up && !alert_up)
       g_last_activity_ms = now;
   }
   g_alert_was_up = alert_up;
@@ -596,7 +595,8 @@ void tick(uint32_t now) {
     closeOsd();
 
   const uint16_t sleep_s = SLEEP_SECS[clampSleep(g_sleep_level)];
-  if (!g_asleep && !g_open && sleep_s > 0 &&
+  const bool hold_for_alert = g_wake_on_alert_cfg && alert_up;
+  if (!g_asleep && !g_open && !hold_for_alert && sleep_s > 0 &&
       now - g_last_activity_ms >= (uint32_t)sleep_s * 1000u)
     enterSleep();
 }
