@@ -107,8 +107,8 @@ pio run -e esp32-c3-supermini
 ./scripts/flash.sh ../dist/tty-buddy-firmware-$(make -C .. -s version).bin
 ```
 
-[`flash.sh`](../../firmware/scripts/flash.sh) stops running `tty-buddy@*` when systemd is present. Details:
-[flashing](flashing.md).
+[`flash.sh`](../../firmware/scripts/flash.sh) stops running `tty-buddy@*` and
+`tty-buddy-board@*` when systemd is present. Details: [flashing](flashing.md).
 
 Serial monitor (CDC, 115200):
 
@@ -176,9 +176,9 @@ inside Docker (`--platform linux/amd64` or `linux/arm64`, `rust:1-bookworm`
 - macOS → always Docker for both arches (and for `dpkg-deb` if missing —
   `build-deb.sh` re-enters itself in the container).
 
-`.deb` ships binary, unit, udev, `configure-instance.sh`, and default
-`daemon.toml` / `buddy.config`. Tarball adds `install.sh` / `uninstall.sh`.
-Behaviour after install: [daemon](daemon.md).
+`.deb` ships binary, `tty-buddy@` / `tty-buddy-board@` units, udev,
+`configure-instance.sh`, and default `daemon.toml` / `buddy.config`. Tarball
+adds `install.sh` / `uninstall.sh`. Behaviour after install: [daemon](daemon.md).
 
 ## Release workflow
 

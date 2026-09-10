@@ -30,9 +30,9 @@ The daemon talks to the board over USB-Serial/JTAG (`303a:1001`).
   Other C3 boards should work as long as the pinout matches.
 - **Daemon** — Linux **amd64** and **arm64** (systemd).
 
-Version: `1.0.1`
-License: [MIT](LICENSE)
-Changes: [CHANGELOG.md](CHANGELOG.md)
+Version: `1.1.0`.
+License: [MIT](LICENSE).
+Changes: [CHANGELOG.md](CHANGELOG.md).
 
 | Path | Contents |
 |------|----------|
@@ -71,7 +71,7 @@ at offset **0x0** (full image). Steps and troubleshooting:
 If a daemon is already running, free the serial port before flashing:
 
 ```bash
-sudo systemctl stop 'tty-buddy@*'
+sudo systemctl stop 'tty-buddy@*' 'tty-buddy-board@*'
 ```
 
 #### On the machine (board on USB):
@@ -171,6 +171,7 @@ sudo /usr/lib/tty-buddy/configure-instance.sh add-board "$USER" '<serial>'
 That creates `/etc/tty-buddy/instances/<id>/` and enables
 `tty-buddy-board@<id>`. If `serial` is set and no board matches, discovery
 fails closed. Details: [daemon guide](docs/guides/daemon.md#several-boards-on-one-host).
+
 ### Keyboard on the host
 
 USB keyboards are handled by the **daemon**, not the ESP. Prefer a stable

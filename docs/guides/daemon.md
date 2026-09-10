@@ -17,12 +17,16 @@ remove them.
 | `/usr/lib/tty-buddy/configure-instance.sh` | Shared post-install helper |
 | `/usr/lib/tty-buddy/uninstall.sh` | Tarball uninstall only |
 
-The unit runs as `User=%i` / `Group=%i` with supplementary `dialout` and
-`input`, working directory `/etc/tty-buddy`, and:
+`tty-buddy@.service` runs as `User=%i` / `Group=%i` with supplementary
+`dialout` and `input`, working directory `/etc/tty-buddy`, and:
 
 ```text
 ExecStart=/usr/bin/tty-buddy run --config /etc/tty-buddy/daemon.toml
 ```
+
+`tty-buddy-board@.service` uses `/etc/tty-buddy/instances/%i/` for config and
+working directory; `User=` / `Group=` come from a drop-in written by
+`configure-instance.sh add-board` (see [Several boards](#several-boards-on-one-host)).
 
 `Restart=always` with a short delay — the process reconnects when the USB
 device disappears.

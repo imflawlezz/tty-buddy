@@ -263,9 +263,10 @@ lookups use `ip` and share the ~3 s slow-poll cache with services (see
 | `maintenance_color` | `maintenance` | |
 
 Unfiltered: `systemctl list-units --type=service --all …`, then sort failed
-→ transitioning → active → inactive → other, truncate to **80**. Display
-names strip `.service` and truncate to **40** characters. Fresh `systemctl`
-forks are rate-limited by the ~3 s slow-poll cache (see
+→ transitioning → active → inactive → other, truncate to **80**. Filtered:
+one batched `systemctl is-active` for the listed units (same sort/truncate).
+Display names strip `.service` and truncate to **40** characters. Fresh
+`systemctl` forks are rate-limited by the ~3 s slow-poll cache (see
 [Reload matrix](#reload-matrix)).
 
 ---

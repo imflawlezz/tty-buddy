@@ -110,4 +110,6 @@ partition set matches what CI built.
 
 ```bash
 sudo systemctl start tty-buddy@$USER
+# if you use board instances:
+# sudo systemctl start 'tty-buddy-board@*'
 ```
