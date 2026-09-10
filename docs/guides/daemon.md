@@ -91,7 +91,8 @@ keyboard_devices = /dev/input/by-id/usb-…-event-kbd
   German letters from the key map. Panel PL/DE glyphs are firmware display
   for those codepoints in the grid, not an input method.
 
-Default shipped `[behavior]` sets `keyboard_opens_terminal = true`.
+Default shipped `[behavior]` sets `keyboard_opens_terminal = false`. For a
+**kiosk** / dedicated console (status typing opens terminal), set it to `true`.
 
 - In **status mode**, allowlisted keyboards are watched without grab when
   auto-open is enabled. Key activity can switch the panel into terminal mode.
@@ -99,8 +100,7 @@ Default shipped `[behavior]` sets `keyboard_opens_terminal = true`.
   keyboards (even if `keyboard_opens_terminal = false`), which can steal the
   desktop keyboard while the session is active.
 
-On a shared desktop, set `keyboard_opens_terminal = false` and allowlist only
-the keyboard you intend for the panel. Full key table:
+Allowlist only the keyboard you intend for the panel. Full key table:
 [configuration reference](../reference/configuration.md#behavior).
 
 ## Install / upgrade — `.deb`
@@ -149,9 +149,10 @@ journalctl -u tty-buddy@$USER -n 50 --no-pager
 ```
 
 Missing symlink: replug USB, `udevadm trigger`, confirm the rule is
-installed. Permission denied on `/dev/input` or serial: fix groups /
-re-login. Set `keyboard_devices` (see [Keyboard on the host](#keyboard-on-the-host))
-or USB keys stay idle.
+installed. Permission denied on `/dev/input` or serial: ensure the user is in
+`dialout` and `input` (install adds both), then log out/in. The daemon logs
+EACCES with an `input` group hint. Set `keyboard_devices` (see
+[Keyboard on the host](#keyboard-on-the-host)) or USB keys stay idle.
 
 ## Several boards on one host
 

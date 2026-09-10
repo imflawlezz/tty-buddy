@@ -24,7 +24,7 @@ Entry point: `tty-buddy run` (systemd `tty-buddy@<user>`).
 | Session loop | `bridge` — reconnect forever; status vs terminal; config reload |
 | Metrics → StatusSnap | `metrics` + `status_config` |
 | PTY + vt100 grid | `terminal` (53×30, same cell geometry as the panel) |
-| Keyboard | `keyboard` — allowlisted devices only; **watch** (no grab) in status; **EVIOCGRAB** in terminal |
+| Keyboard | `keyboard` — allowlisted only; **watch** in status if `keyboard_opens_terminal`; **EVIOCGRAB** in terminal |
 | Framing / ACK | `serial_io` + `protocol` |
 | Settings paths | `settings`, `status_config` |
 

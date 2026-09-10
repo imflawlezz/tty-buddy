@@ -26,6 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (watch/ungrab) and terminal (re-grab)
 - Docs and README cover allowlist, layouts, fail-closed serial discovery, and
   PL/DE display glyphs
+- Shipped default `keyboard_opens_terminal` is `false` (kiosk / dedicated
+  console: set `true`); EACCES on `/dev/input` logs an `input` group hint
 
 ### Fixed
 

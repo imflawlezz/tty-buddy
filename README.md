@@ -14,8 +14,9 @@ systemd units, and alerts on one side; a login shell on the other.
 - **Status mode** — live metrics on the LCD (hostname, clock, CPU / MEM /
   DISK, secondary fields, interfaces, services, optional alert strip).
 - **Terminal mode** — 53×30 VT mirror of a PTY for a configured
-  `shell_user`. A USB keyboard on the **host** (allowlisted in
-  `buddy.config`) is grabbed into that console.
+  `shell_user`. A USB keyboard on the **host** (paths/names in
+  `keyboard_devices`; empty = idle) is grabbed into that console in terminal
+  mode.
 
 The device has one push button for basic device controls. Short press opens
 the OSD, or moves to the next row while it is open. Long press changes the
@@ -179,13 +180,14 @@ ls /dev/input/by-id/
 
 Allowlist that device in `buddy.config` (paths and/or case-insensitive name
 substrings). **Empty `keyboard_devices` opens no keyboards** (status watch
-and terminal grab both stay idle) and logs a warning. Shipped default is
-`keyboard_opens_terminal = true`; on a shared desktop set `false` and
-allowlist one keyboard:
+and terminal grab both stay idle) and logs a warning. If open fails with
+EACCES, ensure the instance user is in `input` and re-login. Shipped default
+is `keyboard_opens_terminal = false`. For a **kiosk** / dedicated console,
+set `true` so typing in status opens terminal:
 
 ```ini
 [behavior]
-keyboard_opens_terminal = false   # shipped default is true
+keyboard_opens_terminal = false   # kiosk: set true
 keyboard_layout = us              # us | pl | de (raw keycodes, not XKB / no AltGr)
 keyboard_devices = /dev/input/by-id/usb-…-event-kbd
 # or: keyboard_devices = NuPhy
