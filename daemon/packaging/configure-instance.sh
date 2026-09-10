@@ -35,6 +35,7 @@ if [[ -f /etc/tty-buddy/buddy.config ]]; then
 startup_mode = status
 keyboard_opens_terminal = true
 fps = 10
+keyboard_layout = us
 
 EOF
       cat /etc/tty-buddy/buddy.config

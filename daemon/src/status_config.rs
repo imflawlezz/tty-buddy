@@ -26,6 +26,9 @@ pub struct StatusUiConfig {
     pub startup_status: bool,
     pub keyboard_opens_terminal: bool,
     pub fps: f32,
+    pub keyboard_layout: crate::keyboard::KeyboardLayout,
+    /// Empty = open no keyboards (allowlist required).
+    pub keyboard_devices: Vec<String>,
     /// Set when `[behavior]` is present; otherwise daemon.toml legacy keys apply.
     pub behavior_from_file: bool,
 }
@@ -51,6 +54,8 @@ impl Default for StatusUiConfig {
             startup_status: true,
             keyboard_opens_terminal: true,
             fps: 10.0,
+            keyboard_layout: crate::keyboard::KeyboardLayout::Us,
+            keyboard_devices: Vec::new(),
             behavior_from_file: false,
         }
     }
@@ -152,6 +157,17 @@ pub(crate) fn parse_status_config_from_str(text: &str) -> StatusUiConfig {
             if let Ok(n) = v.parse::<f32>() {
                 cfg.fps = n.max(1.0);
             }
+        }
+        if let Some(v) = b.get("keyboard_layout") {
+            if let Some(layout) = crate::keyboard::KeyboardLayout::parse(v) {
+                cfg.keyboard_layout = layout;
+            }
+        }
+        if let Some(v) = b
+            .get("keyboard_devices")
+            .or_else(|| b.get("keyboard_device"))
+        {
+            cfg.keyboard_devices = crate::keyboard::parse_keyboard_devices(v);
         }
     }
 
@@ -929,12 +945,22 @@ brightness = 5
 startup_mode = terminal
 keyboard_opens_terminal = false
 fps = 12
+keyboard_layout = de
+keyboard_devices = /dev/input/by-id/usb-kbd-event-kbd, Logitech
 "#;
         let cfg = parse_status_config_from_str(text);
         assert!(cfg.behavior_from_file);
         assert!(!cfg.startup_status);
         assert!(!cfg.keyboard_opens_terminal);
         assert_eq!(cfg.fps, 12.0);
+        assert_eq!(cfg.keyboard_layout, crate::keyboard::KeyboardLayout::De);
+        assert_eq!(
+            cfg.keyboard_devices,
+            vec![
+                "/dev/input/by-id/usb-kbd-event-kbd".to_string(),
+                "Logitech".to_string()
+            ]
+        );
     }
 
     #[test]

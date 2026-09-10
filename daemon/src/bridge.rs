@@ -225,6 +225,7 @@ where
     } else {
         Keyboard::disabled()
     };
+    keyboard.configure(cfg.keyboard_layout, cfg.keyboard_devices.clone());
 
     let interactive = std::io::stdin().is_terminal();
     if interactive && !status_mode {
@@ -252,13 +253,20 @@ where
             if let Some(f) = opts.fps_override {
                 new_cfg.fps = f.max(1.0);
             }
-            let kb_changed = new_cfg.keyboard_opens_terminal != cfg.keyboard_opens_terminal;
+            let kb_changed = new_cfg.keyboard_opens_terminal != cfg.keyboard_opens_terminal
+                || new_cfg.keyboard_layout != cfg.keyboard_layout
+                || new_cfg.keyboard_devices != cfg.keyboard_devices;
             cfg = new_cfg;
             frame_dt = Duration::from_secs_f32(1.0 / cfg.fps.max(1.0));
             eprintln!("reloaded {}", buddy_config.display());
             push_style(&mut serial, &cfg, &mut metrics);
-            if status_mode && kb_changed {
-                enter_status(&mut keyboard, cfg.keyboard_opens_terminal);
+            if kb_changed {
+                keyboard.configure(cfg.keyboard_layout, cfg.keyboard_devices.clone());
+                if status_mode {
+                    enter_status(&mut keyboard, cfg.keyboard_opens_terminal);
+                } else {
+                    let _ = keyboard.grab();
+                }
             }
         }
 
