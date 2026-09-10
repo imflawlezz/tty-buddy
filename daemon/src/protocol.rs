@@ -316,6 +316,9 @@ fn pad_str(s: &str, n: usize) -> Vec<u8> {
     let mut raw = s.as_bytes().to_vec();
     if raw.len() > n {
         raw.truncate(n);
+        while std::str::from_utf8(&raw).is_err() {
+            raw.pop();
+        }
     }
     raw.resize(n, 0);
     raw
@@ -427,6 +430,20 @@ pub fn parse_hex_color(s: &str, default: u16) -> u16 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pad_str_truncates_on_utf8_boundary() {
+        let p = pad_str("aé", 2);
+        assert_eq!(p.len(), 2);
+        assert_eq!(&p[..1], b"a");
+        assert_eq!(p[1], 0);
+
+        let p2 = pad_str("日本語", 4);
+        assert_eq!(p2.len(), 4);
+        assert_eq!(&p2[..3], "日".as_bytes());
+        assert_eq!(p2[3], 0);
+        assert!(std::str::from_utf8(&p2[..3]).is_ok());
+    }
 
     #[test]
     fn sizes() {

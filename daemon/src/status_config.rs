@@ -621,8 +621,38 @@ pub fn write_osd_levels(path: &Path, bright: u8, sleep: u8) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    fs::write(path, out)?;
+    atomic_write(path, &out)?;
     Ok(())
+}
+
+/// Temp+rename when the parent dir is writable; otherwise overwrite in place
+/// (e.g. root-owned `/etc/tty-buddy`, user-owned `buddy.config`).
+fn atomic_write(path: &Path, contents: &str) -> Result<()> {
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let tmp = parent.join(format!(
+        ".{}.{}.tmp",
+        path.file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("buddy.config"),
+        std::process::id()
+    ));
+    match fs::write(&tmp, contents) {
+        Ok(()) => {
+            if let Err(e) = fs::rename(&tmp, path) {
+                let _ = fs::remove_file(&tmp);
+                return Err(e.into());
+            }
+            Ok(())
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+            fs::write(path, contents)?;
+            Ok(())
+        }
+        Err(e) => Err(e.into()),
+    }
 }
 
 pub fn apply_osd_levels(cfg: &mut StatusUiConfig, bright: u8, sleep: u8) {
@@ -924,6 +954,12 @@ time_format = %H:%M:%S # 24h
         assert_eq!(cfg.style.osd_default_bright_pct, 0);
         assert_eq!(cfg.style.osd_sleep_timeout_s, 2);
         assert_eq!(cfg.style.osd_flags & OSD_F_AUTO_BRIGHT, OSD_F_AUTO_BRIGHT);
+        let tmps: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains(".tmp"))
+            .collect();
+        assert!(tmps.is_empty(), "atomic write left temp files: {tmps:?}");
     }
 
     #[test]
