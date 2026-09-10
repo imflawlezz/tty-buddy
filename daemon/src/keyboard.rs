@@ -30,9 +30,6 @@ pub struct Keyboard {
     devices: Vec<Opened>,
     allowlist: Vec<String>,
     layout: KeyboardLayout,
-    shift: bool,
-    ctrl: bool,
-    alt: bool,
     enabled: bool,
     listening: bool,
     exclusive: bool,
@@ -45,6 +42,19 @@ struct Opened {
     name: String,
     file: File,
     grabbed: bool,
+    shift: bool,
+    ctrl: bool,
+    /// Right Alt (AltGr).
+    alt_gr: bool,
+    caps: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct KeyMods {
+    pub shift: bool,
+    pub ctrl: bool,
+    pub caps: bool,
+    pub alt_gr: bool,
 }
 
 impl Keyboard {
@@ -57,9 +67,6 @@ impl Keyboard {
             devices: Vec::new(),
             allowlist: Vec::new(),
             layout: KeyboardLayout::Us,
-            shift: false,
-            ctrl: false,
-            alt: false,
             enabled: true,
             listening: false,
             exclusive: false,
@@ -116,9 +123,6 @@ impl Keyboard {
             }
         }
         self.devices.clear();
-        self.shift = false;
-        self.ctrl = false;
-        self.alt = false;
     }
 
     pub fn maintain(&mut self) -> Result<()> {
@@ -164,6 +168,10 @@ impl Keyboard {
                         name,
                         file,
                         grabbed,
+                        shift: false,
+                        ctrl: false,
+                        alt_gr: false,
+                        caps: false,
                     });
                 }
                 Err(e) => {
@@ -209,7 +217,7 @@ impl Keyboard {
         }
 
         let mut dead: Vec<usize> = Vec::new();
-        for (idx, g) in self.devices.iter().enumerate() {
+        for (idx, g) in self.devices.iter_mut().enumerate() {
             loop {
                 let mut buf = [0u8; 24];
                 let n = unsafe {
@@ -236,15 +244,25 @@ impl Keyboard {
                 }
                 match code {
                     42 | 54 => {
-                        self.shift = value != 0;
+                        g.shift = value != 0;
                         continue;
                     }
                     29 | 97 => {
-                        self.ctrl = value != 0;
+                        g.ctrl = value != 0;
                         continue;
                     }
-                    56 | 100 => {
-                        self.alt = value != 0;
+                    100 => {
+                        g.alt_gr = value != 0;
+                        continue;
+                    }
+                    56 => {
+                        // Left Alt: no Meta map yet
+                        continue;
+                    }
+                    58 => {
+                        if value == 1 {
+                            g.caps = !g.caps;
+                        }
                         continue;
                     }
                     _ => {}
@@ -252,7 +270,13 @@ impl Keyboard {
                 if value != 1 && value != 2 {
                     continue;
                 }
-                if let Some(bytes) = keycode_to_bytes(self.layout, code, self.shift, self.ctrl) {
+                let mods = KeyMods {
+                    shift: g.shift,
+                    ctrl: g.ctrl,
+                    caps: g.caps,
+                    alt_gr: g.alt_gr,
+                };
+                if let Some(bytes) = keycode_to_bytes(self.layout, code, mods) {
                     out.push(bytes);
                 }
             }
@@ -425,8 +449,7 @@ fn evdev_ungrab(fd: i32) -> Result<()> {
 pub(crate) fn keycode_to_bytes(
     layout: KeyboardLayout,
     code: u16,
-    shift: bool,
-    ctrl: bool,
+    mods: KeyMods,
 ) -> Option<Vec<u8>> {
     match code {
         1 => return Some(vec![0x1b]),
@@ -437,12 +460,46 @@ pub(crate) fn keycode_to_bytes(
         108 => return Some(b"\x1b[B".to_vec()),
         106 => return Some(b"\x1b[C".to_vec()),
         105 => return Some(b"\x1b[D".to_vec()),
+        102 => return Some(b"\x1b[H".to_vec()),  // Home
+        107 => return Some(b"\x1b[F".to_vec()),  // End
+        104 => return Some(b"\x1b[5~".to_vec()), // PgUp
+        109 => return Some(b"\x1b[6~".to_vec()), // PgDn
+        111 => return Some(b"\x1b[3~".to_vec()), // Delete
+        59 => return Some(b"\x1bOP".to_vec()),   // F1
+        60 => return Some(b"\x1bOQ".to_vec()),   // F2
+        61 => return Some(b"\x1bOR".to_vec()),   // F3
+        62 => return Some(b"\x1bOS".to_vec()),   // F4
+        63 => return Some(b"\x1b[15~".to_vec()), // F5
+        64 => return Some(b"\x1b[17~".to_vec()), // F6
+        65 => return Some(b"\x1b[18~".to_vec()), // F7
+        66 => return Some(b"\x1b[19~".to_vec()), // F8
+        67 => return Some(b"\x1b[20~".to_vec()), // F9
+        68 => return Some(b"\x1b[21~".to_vec()), // F10
+        87 => return Some(b"\x1b[23~".to_vec()), // F11
+        88 => return Some(b"\x1b[24~".to_vec()), // F12
         _ => {}
     }
 
+    if mods.alt_gr {
+        if let Some((normal, shifted)) = altgr_pair(layout, code) {
+            let bytes = if mods.shift ^ mods.caps {
+                shifted
+            } else {
+                normal
+            };
+            return Some(bytes.to_vec());
+        }
+    }
+
     let (normal, shifted) = printable_pair(layout, code)?;
-    let bytes = if shift { shifted } else { normal };
-    if ctrl && bytes.len() == 1 {
+    let letter = normal.len() == 1 && normal[0].is_ascii_lowercase();
+    let use_shift = if letter {
+        mods.shift ^ mods.caps
+    } else {
+        mods.shift
+    };
+    let bytes = if use_shift { shifted } else { normal };
+    if mods.ctrl && bytes.len() == 1 {
         let c = bytes[0].to_ascii_lowercase();
         if c.is_ascii_lowercase() {
             return Some(vec![c & 0x1f]);
@@ -584,6 +641,48 @@ fn de_symbol(code: u16) -> Option<(&'static [u8], &'static [u8])> {
     })
 }
 
+/// AltGr (right-alt) third level; PL diacritics / DE common symbols.
+fn altgr_pair(layout: KeyboardLayout, code: u16) -> Option<(&'static [u8], &'static [u8])> {
+    match layout {
+        KeyboardLayout::Us => None,
+        KeyboardLayout::Pl => pl_altgr(code),
+        KeyboardLayout::De => de_altgr(code),
+    }
+}
+
+fn pl_altgr(code: u16) -> Option<(&'static [u8], &'static [u8])> {
+    // Codes are physical US positions; ż sits on KEY_Y (letter z under PL QWERTZ).
+    Some(match code {
+        30 => ("ą".as_bytes(), "Ą".as_bytes()),
+        46 => ("ć".as_bytes(), "Ć".as_bytes()),
+        18 => ("ę".as_bytes(), "Ę".as_bytes()),
+        38 => ("ł".as_bytes(), "Ł".as_bytes()),
+        49 => ("ń".as_bytes(), "Ń".as_bytes()),
+        24 => ("ó".as_bytes(), "Ó".as_bytes()),
+        31 => ("ś".as_bytes(), "Ś".as_bytes()),
+        45 => ("ź".as_bytes(), "Ź".as_bytes()),
+        21 => ("ż".as_bytes(), "Ż".as_bytes()),
+        _ => return None,
+    })
+}
+
+fn de_altgr(code: u16) -> Option<(&'static [u8], &'static [u8])> {
+    Some(match code {
+        16 => (b"@", b"@"),
+        18 => ("€".as_bytes(), "€".as_bytes()),
+        3 => ("²".as_bytes(), "²".as_bytes()),
+        4 => ("³".as_bytes(), "³".as_bytes()),
+        8 => (b"{", b"{"),
+        9 => (b"[", b"["),
+        10 => (b"]", b"]"),
+        11 => (b"}", b"}"),
+        12 => (b"\\", b"\\"),
+        13 => (b"~", b"~"),
+        86 => (b"|", b"|"), // KEY_102ND
+        _ => return None,
+    })
+}
+
 pub(crate) fn parse_keyboard_devices(s: &str) -> Vec<String> {
     s.split(',')
         .map(|p| p.trim().to_string())
@@ -595,51 +694,120 @@ pub(crate) fn parse_keyboard_devices(s: &str) -> Vec<String> {
 mod tests {
     use super::*;
 
+    fn mods(shift: bool, ctrl: bool) -> KeyMods {
+        KeyMods {
+            shift,
+            ctrl,
+            ..KeyMods::default()
+        }
+    }
+
     #[test]
     fn special_keys() {
         assert_eq!(
-            keycode_to_bytes(KeyboardLayout::Us, 1, false, false),
+            keycode_to_bytes(KeyboardLayout::Us, 1, mods(false, false)),
             Some(vec![0x1b])
         );
         assert_eq!(
-            keycode_to_bytes(KeyboardLayout::Us, 14, false, false),
+            keycode_to_bytes(KeyboardLayout::Us, 14, mods(false, false)),
             Some(vec![0x7f])
         );
         assert_eq!(
-            keycode_to_bytes(KeyboardLayout::Us, 15, false, false),
+            keycode_to_bytes(KeyboardLayout::Us, 15, mods(false, false)),
             Some(vec![b'\t'])
         );
         assert_eq!(
-            keycode_to_bytes(KeyboardLayout::Us, 28, false, false),
+            keycode_to_bytes(KeyboardLayout::Us, 28, mods(false, false)),
             Some(vec![b'\r'])
         );
         assert_eq!(
-            keycode_to_bytes(KeyboardLayout::Us, 103, false, false),
+            keycode_to_bytes(KeyboardLayout::Us, 103, mods(false, false)),
             Some(b"\x1b[A".to_vec())
         );
         assert_eq!(
-            keycode_to_bytes(KeyboardLayout::Us, 108, false, false),
+            keycode_to_bytes(KeyboardLayout::Us, 108, mods(false, false)),
             Some(b"\x1b[B".to_vec())
         );
     }
 
     #[test]
-    fn letters_shift_and_ctrl() {
+    fn nav_and_function_keys() {
         assert_eq!(
-            keycode_to_bytes(KeyboardLayout::Us, 30, false, false),
+            keycode_to_bytes(KeyboardLayout::Us, 102, mods(false, false)),
+            Some(b"\x1b[H".to_vec())
+        );
+        assert_eq!(
+            keycode_to_bytes(KeyboardLayout::Us, 107, mods(false, false)),
+            Some(b"\x1b[F".to_vec())
+        );
+        assert_eq!(
+            keycode_to_bytes(KeyboardLayout::Us, 104, mods(false, false)),
+            Some(b"\x1b[5~".to_vec())
+        );
+        assert_eq!(
+            keycode_to_bytes(KeyboardLayout::Us, 109, mods(false, false)),
+            Some(b"\x1b[6~".to_vec())
+        );
+        assert_eq!(
+            keycode_to_bytes(KeyboardLayout::Us, 111, mods(false, false)),
+            Some(b"\x1b[3~".to_vec())
+        );
+        assert_eq!(
+            keycode_to_bytes(KeyboardLayout::Us, 59, mods(false, false)),
+            Some(b"\x1bOP".to_vec())
+        );
+        assert_eq!(
+            keycode_to_bytes(KeyboardLayout::Us, 68, mods(false, false)),
+            Some(b"\x1b[21~".to_vec())
+        );
+        assert_eq!(
+            keycode_to_bytes(KeyboardLayout::Us, 88, mods(false, false)),
+            Some(b"\x1b[24~".to_vec())
+        );
+    }
+
+    #[test]
+    fn letters_shift_ctrl_and_caps() {
+        assert_eq!(
+            keycode_to_bytes(KeyboardLayout::Us, 30, mods(false, false)),
             Some(vec![b'a'])
         );
         assert_eq!(
-            keycode_to_bytes(KeyboardLayout::Us, 30, true, false),
+            keycode_to_bytes(KeyboardLayout::Us, 30, mods(true, false)),
             Some(vec![b'A'])
         );
         assert_eq!(
-            keycode_to_bytes(KeyboardLayout::Us, 30, false, true),
+            keycode_to_bytes(KeyboardLayout::Us, 30, mods(false, true)),
             Some(vec![0x01])
         );
         assert_eq!(
-            keycode_to_bytes(KeyboardLayout::Us, 16, true, false),
+            keycode_to_bytes(KeyboardLayout::Us, 16, mods(true, false)),
             Some(vec![b'Q'])
+        );
+        let caps = KeyMods {
+            caps: true,
+            ..KeyMods::default()
+        };
+        assert_eq!(
+            keycode_to_bytes(KeyboardLayout::Us, 30, caps),
+            Some(vec![b'A'])
+        );
+        let caps_shift = KeyMods {
+            shift: true,
+            caps: true,
+            ..KeyMods::default()
+        };
+        assert_eq!(
+            keycode_to_bytes(KeyboardLayout::Us, 30, caps_shift),
+            Some(vec![b'a'])
+        );
+        let caps_digit = KeyMods {
+            caps: true,
+            ..KeyMods::default()
+        };
+        assert_eq!(
+            keycode_to_bytes(KeyboardLayout::Us, 2, caps_digit),
+            Some(vec![b'1'])
         );
     }
 
@@ -647,27 +815,27 @@ mod tests {
     fn y_z_swap_on_qwertz_layouts() {
         // Physical KEY_Y (21) / KEY_Z (44).
         assert_eq!(
-            keycode_to_bytes(KeyboardLayout::Us, 21, false, false),
+            keycode_to_bytes(KeyboardLayout::Us, 21, mods(false, false)),
             Some(vec![b'y'])
         );
         assert_eq!(
-            keycode_to_bytes(KeyboardLayout::Us, 44, false, false),
+            keycode_to_bytes(KeyboardLayout::Us, 44, mods(false, false)),
             Some(vec![b'z'])
         );
         assert_eq!(
-            keycode_to_bytes(KeyboardLayout::Pl, 21, false, false),
+            keycode_to_bytes(KeyboardLayout::Pl, 21, mods(false, false)),
             Some(vec![b'z'])
         );
         assert_eq!(
-            keycode_to_bytes(KeyboardLayout::Pl, 44, false, false),
+            keycode_to_bytes(KeyboardLayout::Pl, 44, mods(false, false)),
             Some(vec![b'y'])
         );
         assert_eq!(
-            keycode_to_bytes(KeyboardLayout::De, 21, true, false),
+            keycode_to_bytes(KeyboardLayout::De, 21, mods(true, false)),
             Some(vec![b'Z'])
         );
         assert_eq!(
-            keycode_to_bytes(KeyboardLayout::De, 44, true, false),
+            keycode_to_bytes(KeyboardLayout::De, 44, mods(true, false)),
             Some(vec![b'Y'])
         );
     }
@@ -675,42 +843,76 @@ mod tests {
     #[test]
     fn digit_row_us_pl_vs_de() {
         assert_eq!(
-            keycode_to_bytes(KeyboardLayout::Us, 2, false, false),
+            keycode_to_bytes(KeyboardLayout::Us, 2, mods(false, false)),
             Some(vec![b'1'])
         );
         assert_eq!(
-            keycode_to_bytes(KeyboardLayout::Us, 2, true, false),
+            keycode_to_bytes(KeyboardLayout::Us, 2, mods(true, false)),
             Some(vec![b'!'])
         );
         assert_eq!(
-            keycode_to_bytes(KeyboardLayout::Us, 3, true, false),
+            keycode_to_bytes(KeyboardLayout::Us, 3, mods(true, false)),
             Some(vec![b'@'])
         );
         assert_eq!(
-            keycode_to_bytes(KeyboardLayout::Pl, 3, true, false),
+            keycode_to_bytes(KeyboardLayout::Pl, 3, mods(true, false)),
             Some(vec![b'@'])
         );
         assert_eq!(
-            keycode_to_bytes(KeyboardLayout::De, 3, true, false),
+            keycode_to_bytes(KeyboardLayout::De, 3, mods(true, false)),
             Some(vec![b'"'])
         );
         assert_eq!(
-            keycode_to_bytes(KeyboardLayout::De, 8, true, false),
+            keycode_to_bytes(KeyboardLayout::De, 8, mods(true, false)),
             Some(vec![b'/'])
         );
         assert_eq!(
-            keycode_to_bytes(KeyboardLayout::Us, 8, true, false),
+            keycode_to_bytes(KeyboardLayout::Us, 8, mods(true, false)),
             Some(vec![b'&'])
         );
         assert_eq!(
-            keycode_to_bytes(KeyboardLayout::De, 12, false, false),
+            keycode_to_bytes(KeyboardLayout::De, 12, mods(false, false)),
             Some("ß".as_bytes().to_vec())
         );
         assert_eq!(
-            keycode_to_bytes(KeyboardLayout::Us, 57, false, false),
+            keycode_to_bytes(KeyboardLayout::Us, 57, mods(false, false)),
             Some(vec![b' '])
         );
-        assert!(keycode_to_bytes(KeyboardLayout::Us, 999, false, false).is_none());
+        assert!(keycode_to_bytes(KeyboardLayout::Us, 999, mods(false, false)).is_none());
+    }
+
+    #[test]
+    fn altgr_pl_and_de() {
+        let altgr = KeyMods {
+            alt_gr: true,
+            ..KeyMods::default()
+        };
+        assert_eq!(
+            keycode_to_bytes(KeyboardLayout::Pl, 30, altgr),
+            Some("ą".as_bytes().to_vec())
+        );
+        assert_eq!(
+            keycode_to_bytes(KeyboardLayout::Pl, 21, altgr),
+            Some("ż".as_bytes().to_vec())
+        );
+        let altgr_shift = KeyMods {
+            alt_gr: true,
+            shift: true,
+            ..KeyMods::default()
+        };
+        assert_eq!(
+            keycode_to_bytes(KeyboardLayout::Pl, 30, altgr_shift),
+            Some("Ą".as_bytes().to_vec())
+        );
+        assert_eq!(
+            keycode_to_bytes(KeyboardLayout::De, 16, altgr),
+            Some(vec![b'@'])
+        );
+        assert_eq!(
+            keycode_to_bytes(KeyboardLayout::De, 18, altgr),
+            Some("€".as_bytes().to_vec())
+        );
+        assert!(keycode_to_bytes(KeyboardLayout::Us, 30, altgr).is_some()); // falls back to 'a'
     }
 
     #[test]
