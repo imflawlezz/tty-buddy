@@ -36,6 +36,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `daemon.toml` `serial` pin is fail-closed: an unmatched serial no longer
   falls through to another board
+- OSD `buddy.config` writes use temp-file + rename when the directory allows
+  it; otherwise overwrite in place (root-owned `/etc/tty-buddy` + user-owned
+  config)
+- StatusSnap string fields truncate on UTF-8 boundaries (`pad_str`)
+- Filtered `[services]` queries use one batched `systemctl is-active` instead of
+  per-unit `show` / `is-active` forks
 
 ## [1.0.1] — 2026-09-09
 
