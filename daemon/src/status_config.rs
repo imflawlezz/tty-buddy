@@ -27,7 +27,7 @@ pub struct StatusUiConfig {
     pub keyboard_opens_terminal: bool,
     pub fps: f32,
     pub keyboard_layout: crate::keyboard::KeyboardLayout,
-    /// Empty = open no keyboards (allowlist required).
+    /// Empty allowlist opens no keyboards.
     pub keyboard_devices: Vec<String>,
     /// Set when `[behavior]` is present; otherwise daemon.toml legacy keys apply.
     pub behavior_from_file: bool,
@@ -52,7 +52,7 @@ impl Default for StatusUiConfig {
             services_filter: None,
             mtime: None,
             startup_status: true,
-            keyboard_opens_terminal: true,
+            keyboard_opens_terminal: false,
             fps: 10.0,
             keyboard_layout: crate::keyboard::KeyboardLayout::Us,
             keyboard_devices: Vec::new(),
@@ -151,7 +151,7 @@ pub(crate) fn parse_status_config_from_str(text: &str) -> StatusUiConfig {
             );
         }
         if let Some(v) = b.get("keyboard_opens_terminal") {
-            cfg.keyboard_opens_terminal = as_bool(v, true);
+            cfg.keyboard_opens_terminal = as_bool(v, false);
         }
         if let Some(v) = b.get("fps") {
             if let Ok(n) = v.parse::<f32>() {
@@ -658,7 +658,7 @@ mod tests {
         assert!(cfg.services_filter.is_none());
         assert_eq!(cfg.style.meter_mode, METER_ON);
         assert!(cfg.startup_status);
-        assert!(cfg.keyboard_opens_terminal);
+        assert!(!cfg.keyboard_opens_terminal);
         assert_eq!(cfg.fps, 10.0);
         assert!(!cfg.behavior_from_file);
     }

@@ -18,7 +18,7 @@ pub struct DaemonSettings {
     #[serde(default = "default_true")]
     pub start_in_status: bool,
     /// Legacy; ignored when buddy.config has `[behavior]`.
-    #[serde(default = "default_true")]
+    #[serde(default = "default_false")]
     pub keyboard_opens_terminal: bool,
     /// Legacy; ignored when buddy.config has `[behavior]`.
     #[serde(default = "default_fps")]
@@ -27,6 +27,9 @@ pub struct DaemonSettings {
 
 fn default_true() -> bool {
     true
+}
+fn default_false() -> bool {
+    false
 }
 fn default_fps() -> f32 {
     10.0
@@ -42,7 +45,7 @@ impl Default for DaemonSettings {
             buddy_config: Some(PathBuf::from("/etc/tty-buddy/buddy.config")),
             shell_user: None,
             start_in_status: true,
-            keyboard_opens_terminal: true,
+            keyboard_opens_terminal: false,
             fps: 10.0,
         }
     }

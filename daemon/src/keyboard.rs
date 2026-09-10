@@ -37,6 +37,7 @@ pub struct Keyboard {
     listening: bool,
     exclusive: bool,
     warned_empty_allowlist: bool,
+    warned_permission: bool,
 }
 
 struct Opened {
@@ -63,6 +64,7 @@ impl Keyboard {
             listening: false,
             exclusive: false,
             warned_empty_allowlist: false,
+            warned_permission: false,
         })
     }
 
@@ -124,7 +126,7 @@ impl Keyboard {
             return Ok(());
         }
 
-        let found = discover_keyboards(&self.allowlist);
+        let found = discover_keyboards(&self.allowlist, &mut self.warned_permission);
 
         self.devices.retain(|g| {
             let keep = found.iter().any(|(p, _)| p == &g.path) && g.path.exists();
@@ -165,7 +167,12 @@ impl Keyboard {
                     });
                 }
                 Err(e) => {
-                    if e.kind() != std::io::ErrorKind::PermissionDenied {
+                    if e.kind() == std::io::ErrorKind::PermissionDenied {
+                        if !self.warned_permission {
+                            log_input_permission(&path, &e);
+                            self.warned_permission = true;
+                        }
+                    } else {
                         eprintln!("keyboard: open {} failed: {e}", path.display());
                     }
                 }
@@ -271,7 +278,7 @@ impl Drop for Keyboard {
     }
 }
 
-fn discover_keyboards(allowlist: &[String]) -> Vec<(PathBuf, String)> {
+fn discover_keyboards(allowlist: &[String], warned_permission: &mut bool) -> Vec<(PathBuf, String)> {
     let mut out = Vec::new();
     if allowlist.is_empty() {
         return out;
@@ -306,9 +313,16 @@ fn discover_keyboards(allowlist: &[String]) -> Vec<(PathBuf, String)> {
         return out;
     }
 
-    let Ok(rd) = std::fs::read_dir("/dev/input") else {
-        out.sort_by(|a, b| a.0.cmp(&b.0));
-        return out;
+    let rd = match std::fs::read_dir("/dev/input") {
+        Ok(rd) => rd,
+        Err(e) => {
+            if e.kind() == std::io::ErrorKind::PermissionDenied && !*warned_permission {
+                log_input_permission(Path::new("/dev/input"), &e);
+                *warned_permission = true;
+            }
+            out.sort_by(|a, b| a.0.cmp(&b.0));
+            return out;
+        }
     };
     for e in rd.flatten() {
         let fname = e.file_name();
@@ -333,6 +347,15 @@ fn discover_keyboards(allowlist: &[String]) -> Vec<(PathBuf, String)> {
     }
     out.sort_by(|a, b| a.0.cmp(&b.0));
     out
+}
+
+fn log_input_permission(path: &Path, err: &std::io::Error) {
+    eprintln!(
+        "keyboard: {err} accessing {} — permission denied (EACCES). \
+         Add the daemon user to the `input` group (packaging uses dialout,input) \
+         and log out/in (or reboot) so the new group applies.",
+        path.display()
+    );
 }
 
 fn is_denylisted_name(phys: &str) -> bool {
@@ -708,6 +731,6 @@ mod tests {
     fn allowlist_match_helpers() {
         assert!(is_denylisted_name("power button"));
         assert!(!is_denylisted_name("logitech keyboard"));
-        assert!(discover_keyboards(&[]).is_empty());
+        assert!(discover_keyboards(&[], &mut false).is_empty());
     }
 }
