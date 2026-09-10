@@ -25,6 +25,7 @@ fi
 install -d /usr/bin /etc/tty-buddy /usr/lib/systemd/system /etc/udev/rules.d /usr/lib/tty-buddy
 install -m 755 "$HERE/bin/tty-buddy" /usr/bin/tty-buddy
 install -m 644 "$HERE/systemd/tty-buddy@.service" /usr/lib/systemd/system/tty-buddy@.service
+install -m 644 "$HERE/systemd/tty-buddy-board@.service" /usr/lib/systemd/system/tty-buddy-board@.service
 install -m 644 "$HERE/udev/99-tty-buddy.rules" /etc/udev/rules.d/99-tty-buddy.rules
 install -m 755 "$HERE/lib/configure-instance.sh" /usr/lib/tty-buddy/configure-instance.sh
 install -m 755 "$HERE/uninstall.sh" /usr/lib/tty-buddy/uninstall.sh
@@ -58,5 +59,5 @@ echo "  1. Plug in the ESP (or unplug/replug) so udev creates /dev/tty-buddy"
 echo "  2. If dialout/input are new for this session, log out/in once, then:"
 echo "       sudo systemctl restart tty-buddy@${USER_NAME}"
 echo
-echo "Optional (several boards):  tty-buddy setup --config /etc/tty-buddy/daemon.toml"
+echo "Optional (several boards):  sudo /usr/lib/tty-buddy/configure-instance.sh add-board $USER_NAME <serial>"
 echo "Uninstall later:            sudo /usr/lib/tty-buddy/uninstall.sh [--purge]"

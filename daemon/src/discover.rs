@@ -90,31 +90,47 @@ fn usb_props_for_tty(tty_name: &str) -> UsbProps {
     (None, None, None, None, None)
 }
 
+fn push_stable_symlink(
+    path: &str,
+    out: &mut Vec<SerialDevice>,
+    seen: &mut std::collections::HashSet<String>,
+) {
+    if !Path::new(path).exists() {
+        return;
+    }
+    let real = fs::canonicalize(path)
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|_| path.to_string());
+    if !seen.insert(real.clone()) {
+        return;
+    }
+    let base = Path::new(&real)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("");
+    let (vid, pid, serial, product, manufacturer) = usb_props_for_tty(base);
+    out.push(SerialDevice {
+        path: path.to_string(),
+        vid,
+        pid,
+        serial,
+        product,
+        manufacturer,
+    });
+}
+
 pub fn list_serial_devices() -> Result<Vec<SerialDevice>> {
     let mut out = Vec::new();
     let mut seen = std::collections::HashSet::new();
 
-    // List /dev/tty-buddy first when present (stable udev symlink).
-    for stable in ["/dev/tty-buddy"] {
-        if Path::new(stable).exists() {
-            let real = fs::canonicalize(stable)
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_else(|_| stable.to_string());
-            if seen.insert(real.clone()) {
-                let base = Path::new(&real)
-                    .file_name()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("");
-                let (vid, pid, serial, product, manufacturer) = usb_props_for_tty(base);
-                out.push(SerialDevice {
-                    path: stable.to_string(),
-                    vid,
-                    pid,
-                    serial,
-                    product,
-                    manufacturer,
-                });
-            }
+    // Prefer udev stable names over raw ttyACM*/ttyUSB*.
+    push_stable_symlink("/dev/tty-buddy", &mut out, &mut seen);
+    if let Ok(paths) = glob_dev("/dev/tty-buddy-*") {
+        let mut paths = paths;
+        paths.sort();
+        for path in paths {
+            let s = path.to_string_lossy().to_string();
+            push_stable_symlink(&s, &mut out, &mut seen);
         }
     }
 
@@ -335,6 +351,61 @@ mod tests {
         assert_eq!(
             pick_device(&mixed, &settings, |_| false).as_deref(),
             Some("/dev/tty-buddy")
+        );
+    }
+
+    #[test]
+    fn prefers_serial_suffixed_device_path() {
+        let path = "/dev/tty-buddy-7C:DF:A1:12:34:56";
+        let settings = DaemonSettings {
+            device_path: Some(path.into()),
+            serial: Some("7C:DF:A1:12:34:56".into()),
+            ..DaemonSettings::default()
+        };
+        let devices = vec![
+            dev(
+                "/dev/tty-buddy",
+                Some(ESP_VID),
+                Some(ESP_PID_JTAG),
+                Some("AA:BB"),
+            ),
+            dev(
+                path,
+                Some(ESP_VID),
+                Some(ESP_PID_JTAG),
+                Some("7C:DF:A1:12:34:56"),
+            ),
+        ];
+        let picked = pick_device(&devices, &settings, |p| p == path);
+        assert_eq!(picked.as_deref(), Some(path));
+    }
+
+    #[test]
+    fn matches_serial_on_suffixed_symlink() {
+        let settings = DaemonSettings {
+            device_path: None,
+            vid: Some(ESP_VID),
+            pid: Some(ESP_PID_JTAG),
+            serial: Some("7C:DF:A1:12:34:56".into()),
+            ..DaemonSettings::default()
+        };
+        let devices = vec![
+            dev(
+                "/dev/tty-buddy",
+                Some(ESP_VID),
+                Some(ESP_PID_JTAG),
+                Some("AA:BB:CC:DD:EE:FF"),
+            ),
+            dev(
+                "/dev/tty-buddy-7C:DF:A1:12:34:56",
+                Some(ESP_VID),
+                Some(ESP_PID_JTAG),
+                Some("7C:DF:A1:12:34:56"),
+            ),
+        ];
+        assert_eq!(
+            pick_device(&devices, &settings, |_| false).as_deref(),
+            Some("/dev/tty-buddy-7C:DF:A1:12:34:56")
         );
     }
 }

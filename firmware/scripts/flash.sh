@@ -76,6 +76,12 @@ if command -v systemctl >/dev/null 2>&1; then
     sudo systemctl stop "$unit"
     RESTART_UNITS+=("$unit")
   done < <(systemctl list-units --type=service --state=running --plain --no-legend 'tty-buddy@*' 2>/dev/null | awk '{print $1}')
+  while read -r unit; do
+    [[ -n "$unit" ]] || continue
+    echo "  stopping $unit for flash…"
+    sudo systemctl stop "$unit"
+    RESTART_UNITS+=("$unit")
+  done < <(systemctl list-units --type=service --state=running --plain --no-legend 'tty-buddy-board@*' 2>/dev/null | awk '{print $1}')
 fi
 
 resolve_esptool() {

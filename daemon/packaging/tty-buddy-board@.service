@@ -1,0 +1,17 @@
+[Unit]
+Description=tty-buddy ESP32 board instance (%i)
+Documentation=file:///etc/tty-buddy/instances/%i/daemon.toml
+After=local-fs.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+SupplementaryGroups=dialout input
+WorkingDirectory=/etc/tty-buddy/instances/%i
+ExecStart=/usr/bin/tty-buddy run --config /etc/tty-buddy/instances/%i/daemon.toml
+Restart=always
+RestartSec=1
+Nice=5
+
+[Install]
+WantedBy=multi-user.target
