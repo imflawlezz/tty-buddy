@@ -363,7 +363,9 @@ Device → host events (`DEV_OSD_BRIGHT` / `DEV_OSD_SLEEP`): levels `0`–`6`
 (`0` = auto / never).
 
 The bridge updates in-memory style and calls `write_osd_levels` on the
-active buddy.config path:
+active buddy.config path (temp file + rename when the directory is writable;
+falls back to in-place overwrite when only the file is writable, e.g. root-owned
+`/etc/tty-buddy` with a user-owned config):
 
 - Rewrites only `brightness` and `sleep_timeout`
 - Renames `[osd]` → `[display]`

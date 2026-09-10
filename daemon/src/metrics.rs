@@ -446,44 +446,60 @@ fn collect_services(filter: Option<&[String]>) -> Vec<StatusSvc> {
     }
 }
 
-/// `list-units --all` omits unloaded stopped units; query ActiveState instead.
+/// `list-units --all` omits unloaded stopped units; batch-query with `is-active`.
 fn collect_filtered_services(filter: &[String]) -> Vec<StatusSvc> {
-    let mut services = Vec::with_capacity(filter.len().min(SVC_COUNT));
-    for entry in filter.iter().take(SVC_COUNT) {
-        let unit = if entry.ends_with(".service") {
-            entry.clone()
-        } else {
-            format!("{entry}.service")
-        };
-        let name = unit.trim_end_matches(".service");
-        if name.ends_with('@') {
-            continue;
-        }
-        services.push(StatusSvc {
-            name: name.chars().take(SVC_NAME_LEN).collect(),
-            status: query_svc_active_state(&unit),
-        });
+    let units: Vec<String> = filter
+        .iter()
+        .take(SVC_COUNT)
+        .filter_map(|entry| {
+            let unit = if entry.ends_with(".service") {
+                entry.clone()
+            } else {
+                format!("{entry}.service")
+            };
+            let name = unit.trim_end_matches(".service");
+            if name.ends_with('@') {
+                None
+            } else {
+                Some(unit)
+            }
+        })
+        .collect();
+    if units.is_empty() {
+        return Vec::new();
     }
-    services
+
+    let states = match Command::new("systemctl")
+        .arg("is-active")
+        .args(&units)
+        .output()
+    {
+        Ok(out) => String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .map(|s| s.trim().to_string())
+            .collect::<Vec<_>>(),
+        Err(_) => Vec::new(),
+    };
+
+    services_from_is_active(&units, &states)
 }
 
-fn query_svc_active_state(unit: &str) -> u8 {
-    let show = Command::new("systemctl")
-        .args(["show", "-p", "ActiveState", "--value", unit])
-        .output();
-    if let Ok(out) = show {
-        let state = String::from_utf8_lossy(&out.stdout);
-        let state = state.trim();
-        if !state.is_empty() {
-            return normalize_svc_status(state);
-        }
-    }
-    // is-active prints the state on stdout even when the exit status is non-zero.
-    let active = Command::new("systemctl").args(["is-active", unit]).output();
-    match active {
-        Ok(out) => normalize_svc_status(String::from_utf8_lossy(&out.stdout).trim()),
-        Err(_) => ST_SVC_MAINTENANCE,
-    }
+pub(crate) fn services_from_is_active(units: &[String], states: &[String]) -> Vec<StatusSvc> {
+    units
+        .iter()
+        .enumerate()
+        .map(|(i, unit)| {
+            let name = unit.trim_end_matches(".service");
+            let status = states
+                .get(i)
+                .map(|s| normalize_svc_status(s))
+                .unwrap_or(ST_SVC_MAINTENANCE);
+            StatusSvc {
+                name: name.chars().take(SVC_NAME_LEN).collect(),
+                status,
+            }
+        })
+        .collect()
 }
 
 pub(crate) fn parse_systemctl_services(text: &str, filter: Option<&[String]>) -> Vec<StatusSvc> {
@@ -622,5 +638,23 @@ docker.service         loaded activating start Docker
         let svcs = parse_systemctl_services(&long, None);
         assert_eq!(svcs.len(), 1);
         assert_eq!(svcs[0].name.len(), SVC_NAME_LEN);
+    }
+
+    #[test]
+    fn filtered_services_zip_is_active_lines() {
+        let units = vec![
+            "ssh.service".into(),
+            "cron.service".into(),
+            "gone.service".into(),
+        ];
+        let states = vec!["active".into(), "inactive".into()];
+        let svcs = services_from_is_active(&units, &states);
+        assert_eq!(svcs.len(), 3);
+        assert_eq!(svcs[0].name, "ssh");
+        assert_eq!(svcs[0].status, ST_SVC_ACTIVE);
+        assert_eq!(svcs[1].name, "cron");
+        assert_eq!(svcs[1].status, ST_SVC_INACTIVE);
+        assert_eq!(svcs[2].name, "gone");
+        assert_eq!(svcs[2].status, ST_SVC_MAINTENANCE);
     }
 }
