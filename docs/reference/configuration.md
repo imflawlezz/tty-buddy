@@ -139,7 +139,7 @@ keys.
 | `startup_mode` | `start_in_status` | status | Terminal if value is `terminal`, `console`, `tty`, `false`, `0`, `no`, or `off` (case-insensitive). **Any other string → status** |
 | `keyboard_opens_terminal` | — | `false` | In status mode, watch allowlisted keyboards without grab; any activity opens terminal and sets activity/wake. Shipped default is off (safe for shared desktops). **Kiosk / dedicated console:** set `true` |
 | `fps` | — | `10` | Terminal frame cap; parsed value `.max(1.0)` |
-| `keyboard_layout` | — | `us` | Evdev→PTY map only (not XKB / not AltGr). `us`; `pl` = QWERTZ Y/Z swap with US digit/punct (no Polish diacritic keys); `de` = QWERTZ + German letters (äöüß…). Aliases: `en`/`qwerty`→us, `pl_qwertz`/`polish`→pl, `de_qwertz`/`german`→de |
+| `keyboard_layout` | — | `us` | Evdev→PTY map (not XKB). `us`; `pl` = QWERTZ Y/Z + US digit/punct + AltGr Polish diacritics; `de` = QWERTZ + German letters + AltGr symbols. Also: CapsLock, F1–F12, Delete/Home/End/PgUp/PgDn. Aliases: `en`/`qwerty`→us, `pl_qwertz`/`polish`→pl, `de_qwertz`/`german`→de |
 | `keyboard_devices` | `keyboard_device` | empty | Allowlist: `/dev/input/by-id/…` paths and/or case-insensitive name substrings (comma-separated). **Empty → no keyboards opened** + warning |
 
 `keyboard_opens_terminal = true` is for a **kiosk** / dedicated host console:
@@ -153,8 +153,8 @@ grabbed even when this flag is `false`.
 `*-hidraw`, `*-event-joystick`), or use a name substring. Without
 `keyboard_devices`, terminal mode will not receive USB keyboard input even
 when `keyboard_opens_terminal` is true. Firmware PL/DE glyphs render those
-codepoints in the grid; `keyboard_layout = pl` does not type Polish
-diacritics. Example:
+codepoints in the grid; `keyboard_layout = pl` uses AltGr for Polish
+diacritics (ąęć…). Example:
 
 ```ini
 [behavior]

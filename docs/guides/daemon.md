@@ -86,10 +86,9 @@ keyboard_devices = /dev/input/by-id/usb-…-event-kbd
   name substrings** (sysfs device name). Paths are canonicalized when
   opened.
 - `keyboard_layout` (`us` / `pl` / `de`) maps raw Linux keycodes to PTY
-  bytes. It does **not** follow desktop XKB and has **no AltGr**. `pl` is
-  QWERTZ Y/Z only (US digit/punct — not Polish diacritic input). `de` emits
-  German letters from the key map. Panel PL/DE glyphs are firmware display
-  for those codepoints in the grid, not an input method.
+  bytes (not desktop XKB). Modifiers (Shift/Ctrl/Caps/AltGr) are tracked per
+  device. `pl` AltGr types Polish diacritics; `de` AltGr types common third-level
+  symbols. Also maps F1–F12 and Delete/Home/End/PgUp/PgDn.
 
 Default shipped `[behavior]` sets `keyboard_opens_terminal = false`. For a
 **kiosk** / dedicated console (status typing opens terminal), set it to `true`.

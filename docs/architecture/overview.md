@@ -40,7 +40,8 @@ PTY and push the cell payload at up to `fps` (keystrokes force an immediate
 frame). Allowlisted host keyboards are **always EVIOCGRAB’d** while terminal
 mode is active (device toggle or keyboard activity), even when
 `keyboard_opens_terminal = false`. Empty `keyboard_devices` means no USB
-keyboard I/O. `keyboard_layout` maps raw keycodes in the daemon (not XKB).
+keyboard I/O. `keyboard_layout` maps raw keycodes in the daemon (not XKB),
+with per-device modifiers (incl. CapsLock / AltGr).
 Cursor flags and activity wake the panel when needed.
 
 **Config.** `daemon.toml` is host/install (device bind, `shell_user`, path

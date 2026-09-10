@@ -13,8 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   paths and/or case-insensitive name substrings; empty list opens **no**
   keyboards (watch or grab) and logs a warning
 - `[behavior] keyboard_layout` (`us` / `pl` / `de`) for daemon evdev→PTY mapping
-  (not XKB; no AltGr). `pl` is QWERTZ Y/Z with a US digit row; `de` emits
-  German letters from the key map
+  (not XKB). `pl` is QWERTZ Y/Z with a US digit row; `de` emits German letters
+  from the key map
+- CapsLock, AltGr (PL diacritics / DE third level), F1–F12, and
+  Delete/Home/End/PgUp/PgDn; Shift/Ctrl/Caps/AltGr tracked **per keyboard
+  device**
 - Firmware terminal glyphs for curated Polish and German diacritics (6×8), with
   a generator script and native unit tests
 

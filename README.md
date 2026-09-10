@@ -188,14 +188,14 @@ set `true` so typing in status opens terminal:
 ```ini
 [behavior]
 keyboard_opens_terminal = false   # kiosk: set true
-keyboard_layout = us              # us | pl | de (raw keycodes, not XKB / no AltGr)
+keyboard_layout = us              # us | pl | de (raw keycodes, not XKB; AltGr on pl/de)
 keyboard_devices = /dev/input/by-id/usb-…-event-kbd
 # or: keyboard_devices = NuPhy
 ```
 
-`pl` is QWERTZ Y/Z with a US digit row — not Polish diacritic input. `de`
-can emit German letters. Panel glyphs for Polish/German codepoints are
-firmware-side display; other scripts may show `?`.
+`pl` is QWERTZ Y/Z with a US digit row; AltGr types Polish diacritics. `de`
+can emit German letters and AltGr symbols. Panel glyphs for Polish/German
+codepoints are firmware-side display; other scripts may show `?`.
 
 With `keyboard_opens_terminal = true`, watched keys can open terminal from
 status. While terminal mode is active, tty-buddy **EVIOCGRAB**s allowlisted
