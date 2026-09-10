@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `[behavior] keyboard_devices` allowlist: comma-separated `/dev/input/by-id/…`
+  paths and/or case-insensitive name substrings; empty list opens **no**
+  keyboards (watch or grab) and logs a warning
+- `[behavior] keyboard_layout` (`us` / `pl` / `de`) for daemon evdev→PTY mapping
+  (not XKB; no AltGr). `pl` is QWERTZ Y/Z with a US digit row; `de` emits
+  German letters from the key map
+- Firmware terminal glyphs for curated Polish and German diacritics (6×8), with
+  a generator script and native unit tests
+
+### Changed
+
+- Host keyboards are no longer auto-discovered by name heuristics; configure
+  `keyboard_devices` after install or USB keys stay idle
+- Buddy-config reload reapplies keyboard allowlist/layout in both status
+  (watch/ungrab) and terminal (re-grab)
+- Docs and README cover allowlist, layouts, fail-closed serial discovery, and
+  PL/DE display glyphs
+
+### Fixed
+
+- `daemon.toml` `serial` pin is fail-closed: an unmatched serial no longer
+  falls through to another board
+
 ## [1.0.1] — 2026-09-09
 
 ### Changed

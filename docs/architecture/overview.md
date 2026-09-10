@@ -20,26 +20,28 @@ Entry point: `tty-buddy run` (systemd `tty-buddy@<user>`).
 
 | Concern | Module / area |
 |---------|----------------|
-| Device discovery | `discover` — `/dev/tty-buddy`, then vid/pid/serial from `daemon.toml` |
+| Device discovery | `discover` — `device_path` → fail-closed `serial` → vid/pid → Espressif → `/dev/tty-buddy` / first (see [configuration](../reference/configuration.md#discovery-pick_device)) |
 | Session loop | `bridge` — reconnect forever; status vs terminal; config reload |
 | Metrics → StatusSnap | `metrics` + `status_config` |
 | PTY + vt100 grid | `terminal` (53×30, same cell geometry as the panel) |
-| Keyboard | `keyboard` — **watch** (no grab) in status; **EVIOCGRAB** in terminal |
+| Keyboard | `keyboard` — allowlisted devices only; **watch** (no grab) in status; **EVIOCGRAB** in terminal |
 | Framing / ACK | `serial_io` + `protocol` |
 | Settings paths | `settings`, `status_config` |
 
 **Status mode.** Sample about once per second, pack StatusSnap v13, send
-with `FLAG_STATUS`. Optionally watch keyboards; activity can switch to
-terminal and set `FLAG_ACTIVITY` (wake). Style (`FLAG_STYLE`) is pushed when
-config/metrics style inputs change; the device dirties status chrome when
-that style differs while already in status mode.
+with `FLAG_STATUS`. Optionally watch allowlisted keyboards when
+`keyboard_opens_terminal` is set; activity can switch to terminal and set
+`FLAG_ACTIVITY` (wake). Style (`FLAG_STYLE`) is pushed when config/metrics
+style inputs change; the device dirties status chrome when that style differs
+while already in status mode.
 
 **Terminal mode.** Spawn the systemd instance user’s login shell inside a
 PTY and push the cell payload at up to `fps` (keystrokes force an immediate
-frame). Matching host keyboards are **always EVIOCGRAB’d** while terminal
+frame). Allowlisted host keyboards are **always EVIOCGRAB’d** while terminal
 mode is active (device toggle or keyboard activity), even when
-`keyboard_opens_terminal = false`. Cursor flags and activity wake the panel
-when needed.
+`keyboard_opens_terminal = false`. Empty `keyboard_devices` means no USB
+keyboard I/O. `keyboard_layout` maps raw keycodes in the daemon (not XKB).
+Cursor flags and activity wake the panel when needed.
 
 **Config.** `daemon.toml` is host/install (device bind, `shell_user`, path
 to panel config). `buddy.config` is panel UX and behaviour; mtime reload
@@ -49,13 +51,13 @@ rewrite `[display]` when linked.
 ### Device (`firmware/`)
 
 PlatformIO env `esp32-c3-supermini` (Arduino + TFT_eSPI). Native env builds
-protocol unit tests only.
+protocol and Unicode glyph unit tests.
 
 | Concern | Area |
 |---------|------|
 | Link + modes | `main` — wait for host, status vs terminal paint |
 | Status layout | `status_ui` — header / hero / secondary / ifaces / services / alerts |
-| VT cells | `terminal` — 53×30 mirror |
+| VT cells | `terminal` — 53×30; ASCII Font1, curated PL/DE bitmaps, procedural box/Braille |
 | Button, BL, sleep | `osd` — GPIO10 button, GPIO5 PWM, NVS when offline |
 | Wire decode | `protocol` — shared with host tests |
 

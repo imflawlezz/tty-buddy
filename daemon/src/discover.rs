@@ -184,19 +184,26 @@ pub(crate) fn pick_device(
         }
     }
 
+    // Serial pin is fail-closed: never fall through to a different board.
+    if let Some(ref ser) = settings.serial {
+        let pool: Vec<_> = match (settings.vid, settings.pid) {
+            (Some(vid), Some(pid)) => devices
+                .iter()
+                .filter(|d| d.vid == Some(vid) && d.pid == Some(pid))
+                .collect(),
+            _ => devices.iter().collect(),
+        };
+        return pool
+            .into_iter()
+            .find(|d| d.serial.as_deref() == Some(ser.as_str()))
+            .map(|d| d.path.clone());
+    }
+
     if let (Some(vid), Some(pid)) = (settings.vid, settings.pid) {
         let matches: Vec<_> = devices
             .iter()
             .filter(|d| d.vid == Some(vid) && d.pid == Some(pid))
             .collect();
-        if let Some(ref ser) = settings.serial {
-            if let Some(d) = matches
-                .iter()
-                .find(|d| d.serial.as_deref() == Some(ser.as_str()))
-            {
-                return Some(d.path.clone());
-            }
-        }
         if matches.len() == 1 {
             return Some(matches[0].path.clone());
         }
@@ -275,6 +282,32 @@ mod tests {
         ];
         let picked = pick_device(&devices, &settings, |_| false);
         assert_eq!(picked.as_deref(), Some("/dev/ttyACM1"));
+    }
+
+    #[test]
+    fn serial_unmatched_does_not_fall_through() {
+        let settings = DaemonSettings {
+            device_path: None,
+            vid: Some(ESP_VID),
+            pid: Some(ESP_PID_JTAG),
+            serial: Some("MISSING".into()),
+            ..DaemonSettings::default()
+        };
+        let devices = vec![
+            dev(
+                "/dev/ttyACM0",
+                Some(ESP_VID),
+                Some(ESP_PID_JTAG),
+                Some("ZZZ"),
+            ),
+            dev(
+                "/dev/ttyACM1",
+                Some(ESP_VID),
+                Some(ESP_PID_JTAG),
+                Some("ABC"),
+            ),
+        ];
+        assert_eq!(pick_device(&devices, &settings, |_| false), None);
     }
 
     #[test]

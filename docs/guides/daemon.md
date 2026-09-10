@@ -61,23 +61,47 @@ systemd instance user and spawns that same user’s login shell inside the PTY.
 A mismatched `shell_user` now aborts startup instead of pretending to switch
 users.
 
-## Keyboard capture warning
+## Keyboard on the host
 
-By default, `keyboard_opens_terminal = true` in `buddy.config`.
+USB keyboards are opened by the daemon from an **allowlist** in
+`buddy.config` (`keyboard_devices`). Prefer `/dev/input/by-id/…-event-kbd`
+(not mouse, hidraw, or joystick nodes):
 
-- In **status mode**, the daemon watches matching host keyboards without grab.
-  Any watched key activity can switch the panel into terminal mode.
-- In **terminal mode**, the daemon always uses **EVIOCGRAB** on matching
-  keyboard devices (even if `keyboard_opens_terminal = false`), which can
-  steal the desktop keyboard while the session is active.
-
-Use this only on a dedicated machine or a deliberately chosen keyboard. To
-disable status-mode auto-open entirely:
+```bash
+ls /dev/input/by-id/
+```
 
 ```ini
 [behavior]
 keyboard_opens_terminal = false
+keyboard_layout = us
+keyboard_devices = /dev/input/by-id/usb-…-event-kbd
+# or: keyboard_devices = NuPhy, Logitech
 ```
+
+- **Empty `keyboard_devices`** — no keyboards are opened (watch or grab). The
+  daemon logs a warning. Terminal mode still works from the device button /
+  host stdin when interactive, but USB keys do nothing until allowlisted.
+- Entries are comma-separated **absolute paths** and/or **case-insensitive
+  name substrings** (sysfs device name). Paths are canonicalized when
+  opened.
+- `keyboard_layout` (`us` / `pl` / `de`) maps raw Linux keycodes to PTY
+  bytes. It does **not** follow desktop XKB and has **no AltGr**. `pl` is
+  QWERTZ Y/Z only (US digit/punct — not Polish diacritic input). `de` emits
+  German letters from the key map. Panel PL/DE glyphs are firmware display
+  for those codepoints in the grid, not an input method.
+
+Default shipped `[behavior]` sets `keyboard_opens_terminal = true`.
+
+- In **status mode**, allowlisted keyboards are watched without grab when
+  auto-open is enabled. Key activity can switch the panel into terminal mode.
+- In **terminal mode**, the daemon always **EVIOCGRAB**s allowlisted
+  keyboards (even if `keyboard_opens_terminal = false`), which can steal the
+  desktop keyboard while the session is active.
+
+On a shared desktop, set `keyboard_opens_terminal = false` and allowlist only
+the keyboard you intend for the panel. Full key table:
+[configuration reference](../reference/configuration.md#behavior).
 
 ## Install / upgrade — `.deb`
 
@@ -126,7 +150,8 @@ journalctl -u tty-buddy@$USER -n 50 --no-pager
 
 Missing symlink: replug USB, `udevadm trigger`, confirm the rule is
 installed. Permission denied on `/dev/input` or serial: fix groups /
-re-login.
+re-login. Set `keyboard_devices` (see [Keyboard on the host](#keyboard-on-the-host))
+or USB keys stay idle.
 
 ## Several boards on one host
 
@@ -139,8 +164,10 @@ tty-buddy setup --config /etc/tty-buddy/daemon.toml
 sudo systemctl restart tty-buddy@$USER
 ```
 
-`setup` writes `device_path`, `vid`, `pid`, `serial`, and `shell_user`. Only
-one `tty-buddy@user` instance is packaged by default; extra boards need
+`setup` writes `device_path`, `vid`, `pid`, `serial`, and `shell_user`. If
+`serial` is set and no board matches, discovery **fails closed** (does not
+pick another device). Only one `tty-buddy@user` instance is packaged by
+default; extra boards need
 separate config/unit arrangements (not automated).
 
 ## Uninstall

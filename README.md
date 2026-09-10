@@ -14,7 +14,8 @@ systemd units, and alerts on one side; a login shell on the other.
 - **Status mode** — live metrics on the LCD (hostname, clock, CPU / MEM /
   DISK, secondary fields, interfaces, services, optional alert strip).
 - **Terminal mode** — 53×30 VT mirror of a PTY for a configured
-  `shell_user`. A USB keyboard on the **host** is grabbed into that console.
+  `shell_user`. A USB keyboard on the **host** (allowlisted in
+  `buddy.config`) is grabbed into that console.
 
 The device has one push button for basic device controls. Short press opens
 the OSD, or moves to the next row while it is open. Long press changes the
@@ -158,27 +159,47 @@ systemctl status tty-buddy@$USER
 #### Several boards on one host
 
 Pin a specific USB device (path / vid / pid / serial) and console user into
-`daemon.toml`, then restart:
+`daemon.toml`, then restart. If `serial` is set and no board matches,
+discovery fails closed (does not pick another device):
 
 ```bash
 tty-buddy setup --config /etc/tty-buddy/daemon.toml
 sudo systemctl restart tty-buddy@$USER
 ```
 
-### Keyboard capture warning
+### Keyboard on the host
 
-With `keyboard_opens_terminal = true`, typing on a watched host keyboard can
-open terminal mode from status mode. While terminal mode is active, tty-buddy
-always grabs matching keyboards for the console (EVIOCGRAB), even if
-`keyboard_opens_terminal` is `false`.
+USB keyboards are handled by the **daemon**, not the ESP. Prefer a stable
+udev path under `/dev/input/by-id/` (the `*-event-kbd` node, not mouse /
+hidraw / joystick).
 
-On a normal desktop, set auto-open to `false` unless the keyboard is dedicated
-to tty-buddy:
+```bash
+ls /dev/input/by-id/
+```
+
+Allowlist that device in `buddy.config` (paths and/or case-insensitive name
+substrings). **Empty `keyboard_devices` opens no keyboards** (status watch
+and terminal grab both stay idle) and logs a warning. Shipped default is
+`keyboard_opens_terminal = true`; on a shared desktop set `false` and
+allowlist one keyboard:
 
 ```ini
 [behavior]
-keyboard_opens_terminal = false
+keyboard_opens_terminal = false   # shipped default is true
+keyboard_layout = us              # us | pl | de (raw keycodes, not XKB / no AltGr)
+keyboard_devices = /dev/input/by-id/usb-…-event-kbd
+# or: keyboard_devices = NuPhy
 ```
+
+`pl` is QWERTZ Y/Z with a US digit row — not Polish diacritic input. `de`
+can emit German letters. Panel glyphs for Polish/German codepoints are
+firmware-side display; other scripts may show `?`.
+
+With `keyboard_opens_terminal = true`, watched keys can open terminal from
+status. While terminal mode is active, tty-buddy **EVIOCGRAB**s allowlisted
+keyboards (even if auto-open is `false`), which can steal the desktop
+keyboard. Detail: [`docs/guides/daemon.md`](docs/guides/daemon.md),
+[`docs/reference/configuration.md`](docs/reference/configuration.md).
 
 ### Configuration
 
@@ -188,12 +209,13 @@ keyboard_opens_terminal = false
 | `/etc/tty-buddy/buddy.config` | Panel UX (behavior, layout, display, …) |
 
 ```ini
-# Fragment of buddy.config (shipped default keeps keyboard_opens_terminal =
-# true; on a desktop, prefer false — see warning above)
+# Example desktop fragment (not the full shipped template)
 [behavior]
 startup_mode = status
 keyboard_opens_terminal = false
 fps = 10
+keyboard_layout = us
+keyboard_devices = /dev/input/by-id/usb-EXAMPLE-event-kbd
 
 [globals]
 label_color = #888888

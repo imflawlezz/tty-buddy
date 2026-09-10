@@ -6,7 +6,8 @@
 #include "protocol.h"
 #include "status_ui.h"
 
-// Font 1 (GLCD) 6×8 ASCII + on-device procedural Unicode (box/block/Braille).
+// Font 1 (GLCD) 6×8 ASCII + curated PL/DE diacritic bitmaps + procedural
+// box/block/Braille.
 
 class Terminal {
 public:

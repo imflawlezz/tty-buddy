@@ -2,19 +2,41 @@
 
 use std::fs::File;
 use std::os::fd::AsRawFd;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum KeyboardLayout {
+    #[default]
+    Us,
+    Pl,
+    De,
+}
+
+impl KeyboardLayout {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "us" | "en" | "qwerty" => Some(Self::Us),
+            "pl" | "pl_qwertz" | "polish" => Some(Self::Pl),
+            "de" | "de_qwertz" | "german" => Some(Self::De),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Default)]
 pub struct Keyboard {
     devices: Vec<Opened>,
+    allowlist: Vec<String>,
+    layout: KeyboardLayout,
     shift: bool,
     ctrl: bool,
     alt: bool,
     enabled: bool,
     listening: bool,
     exclusive: bool,
+    warned_empty_allowlist: bool,
 }
 
 struct Opened {
@@ -32,13 +54,29 @@ impl Keyboard {
     pub fn open() -> Result<Self> {
         Ok(Self {
             devices: Vec::new(),
+            allowlist: Vec::new(),
+            layout: KeyboardLayout::Us,
             shift: false,
             ctrl: false,
             alt: false,
             enabled: true,
             listening: false,
             exclusive: false,
+            warned_empty_allowlist: false,
         })
+    }
+
+    pub fn configure(&mut self, layout: KeyboardLayout, allowlist: Vec<String>) {
+        self.layout = layout;
+        self.allowlist = allowlist;
+        if self.enabled && self.allowlist.is_empty() && !self.warned_empty_allowlist {
+            eprintln!(
+                "keyboard: WARNING: [behavior] keyboard_devices is empty — \
+                 no keyboards will be opened. Set paths (/dev/input/by-id/…) \
+                 or name substrings to allowlist devices before grab/watch."
+            );
+            self.warned_empty_allowlist = true;
+        }
     }
 
     pub fn grab(&mut self) -> Result<()> {
@@ -86,7 +124,7 @@ impl Keyboard {
             return Ok(());
         }
 
-        let found = discover_keyboards();
+        let found = discover_keyboards(&self.allowlist);
 
         self.devices.retain(|g| {
             let keep = found.iter().any(|(p, _)| p == &g.path) && g.path.exists();
@@ -207,7 +245,7 @@ impl Keyboard {
                 if value != 1 && value != 2 {
                     continue;
                 }
-                if let Some(bytes) = keycode_to_bytes(code, self.shift, self.ctrl) {
+                if let Some(bytes) = keycode_to_bytes(self.layout, code, self.shift, self.ctrl) {
                     out.push(bytes);
                 }
             }
@@ -233,14 +271,48 @@ impl Drop for Keyboard {
     }
 }
 
-fn discover_keyboards() -> Vec<(PathBuf, String)> {
+fn discover_keyboards(allowlist: &[String]) -> Vec<(PathBuf, String)> {
     let mut out = Vec::new();
+    if allowlist.is_empty() {
+        return out;
+    }
+
+    let path_entries: Vec<&str> = allowlist
+        .iter()
+        .map(|s| s.as_str())
+        .filter(|s| s.starts_with('/'))
+        .collect();
+    let name_entries: Vec<String> = allowlist
+        .iter()
+        .filter(|s| !s.starts_with('/'))
+        .map(|s| s.to_ascii_lowercase())
+        .collect();
+
+    for entry in &path_entries {
+        let path = PathBuf::from(entry);
+        if !path.exists() {
+            continue;
+        }
+        let resolved = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+        let name = evdev_name_for_path(&resolved).unwrap_or_else(|| entry.to_string());
+        if out.iter().any(|(p, _)| p == &resolved) {
+            continue;
+        }
+        out.push((resolved, name));
+    }
+
+    if name_entries.is_empty() {
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        return out;
+    }
+
     let Ok(rd) = std::fs::read_dir("/dev/input") else {
+        out.sort_by(|a, b| a.0.cmp(&b.0));
         return out;
     };
     for e in rd.flatten() {
-        let name = e.file_name();
-        let n = name.to_string_lossy();
+        let fname = e.file_name();
+        let n = fname.to_string_lossy();
         if !n.starts_with("event") {
             continue;
         }
@@ -248,22 +320,35 @@ fn discover_keyboards() -> Vec<(PathBuf, String)> {
         let phys = std::fs::read_to_string(format!("/sys/class/input/{n}/device/name"))
             .unwrap_or_default()
             .to_lowercase();
-        if phys.contains("power")
-            || phys.contains("lid")
-            || phys.contains("video bus")
-            || phys.contains("consumer control")
-            || phys.contains("system control")
-            || phys.contains("mouse")
-        {
+        if is_denylisted_name(&phys) {
             continue;
         }
-        if !(phys.contains("keyboard") || phys.contains("kbd")) {
+        if !name_entries.iter().any(|sub| phys.contains(sub)) {
+            continue;
+        }
+        if out.iter().any(|(p, _)| p == &path) {
             continue;
         }
         out.push((path, phys.trim().to_string()));
     }
     out.sort_by(|a, b| a.0.cmp(&b.0));
     out
+}
+
+fn is_denylisted_name(phys: &str) -> bool {
+    phys.contains("power")
+        || phys.contains("lid")
+        || phys.contains("video bus")
+        || phys.contains("consumer control")
+        || phys.contains("system control")
+        || phys.contains("mouse")
+}
+
+fn evdev_name_for_path(path: &Path) -> Option<String> {
+    let n = path.file_name()?.to_str()?;
+    std::fs::read_to_string(format!("/sys/class/input/{n}/device/name"))
+        .ok()
+        .map(|s| s.trim().to_string())
 }
 
 /// Linux `EVIOCGRAB` = `_IOW('E', 0x90, int)`.
@@ -311,8 +396,13 @@ fn evdev_ungrab(fd: i32) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn keycode_to_bytes(code: u16, shift: bool, ctrl: bool) -> Option<Vec<u8>> {
-    let ch = match code {
+pub(crate) fn keycode_to_bytes(
+    layout: KeyboardLayout,
+    code: u16,
+    shift: bool,
+    ctrl: bool,
+) -> Option<Vec<u8>> {
+    match code {
         1 => return Some(vec![0x1b]),
         14 => return Some(vec![0x7f]),
         15 => return Some(vec![b'\t']),
@@ -321,197 +411,158 @@ pub(crate) fn keycode_to_bytes(code: u16, shift: bool, ctrl: bool) -> Option<Vec
         108 => return Some(b"\x1b[B".to_vec()),
         106 => return Some(b"\x1b[C".to_vec()),
         105 => return Some(b"\x1b[D".to_vec()),
-        57 => b' ',
-        2 => {
-            if shift {
-                b'!'
-            } else {
-                b'1'
-            }
-        }
-        3 => {
-            if shift {
-                b'@'
-            } else {
-                b'2'
-            }
-        }
-        4 => {
-            if shift {
-                b'#'
-            } else {
-                b'3'
-            }
-        }
-        5 => {
-            if shift {
-                b'$'
-            } else {
-                b'4'
-            }
-        }
-        6 => {
-            if shift {
-                b'%'
-            } else {
-                b'5'
-            }
-        }
-        7 => {
-            if shift {
-                b'^'
-            } else {
-                b'6'
-            }
-        }
-        8 => {
-            if shift {
-                b'&'
-            } else {
-                b'7'
-            }
-        }
-        9 => {
-            if shift {
-                b'*'
-            } else {
-                b'8'
-            }
-        }
-        10 => {
-            if shift {
-                b'('
-            } else {
-                b'9'
-            }
-        }
-        11 => {
-            if shift {
-                b')'
-            } else {
-                b'0'
-            }
-        }
-        12 => {
-            if shift {
-                b'_'
-            } else {
-                b'-'
-            }
-        }
-        13 => {
-            if shift {
-                b'+'
-            } else {
-                b'='
-            }
-        }
-        16 => letter(b'q', shift),
-        17 => letter(b'w', shift),
-        18 => letter(b'e', shift),
-        19 => letter(b'r', shift),
-        20 => letter(b't', shift),
-        21 => letter(b'y', shift),
-        22 => letter(b'u', shift),
-        23 => letter(b'i', shift),
-        24 => letter(b'o', shift),
-        25 => letter(b'p', shift),
-        30 => letter(b'a', shift),
-        31 => letter(b's', shift),
-        32 => letter(b'd', shift),
-        33 => letter(b'f', shift),
-        34 => letter(b'g', shift),
-        35 => letter(b'h', shift),
-        36 => letter(b'j', shift),
-        37 => letter(b'k', shift),
-        38 => letter(b'l', shift),
-        44 => letter(b'z', shift),
-        45 => letter(b'x', shift),
-        46 => letter(b'c', shift),
-        47 => letter(b'v', shift),
-        48 => letter(b'b', shift),
-        49 => letter(b'n', shift),
-        50 => letter(b'm', shift),
-        39 => {
-            if shift {
-                b':'
-            } else {
-                b';'
-            }
-        }
-        40 => {
-            if shift {
-                b'"'
-            } else {
-                b'\''
-            }
-        }
-        41 => {
-            if shift {
-                b'~'
-            } else {
-                b'`'
-            }
-        }
-        43 => {
-            if shift {
-                b'|'
-            } else {
-                b'\\'
-            }
-        }
-        51 => {
-            if shift {
-                b'<'
-            } else {
-                b','
-            }
-        }
-        52 => {
-            if shift {
-                b'>'
-            } else {
-                b'.'
-            }
-        }
-        53 => {
-            if shift {
-                b'?'
-            } else {
-                b'/'
-            }
-        }
-        26 => {
-            if shift {
-                b'{'
-            } else {
-                b'['
-            }
-        }
-        27 => {
-            if shift {
-                b'}'
-            } else {
-                b']'
-            }
-        }
-        _ => return None,
-    };
-    if ctrl {
-        let c = ch.to_ascii_lowercase();
+        _ => {}
+    }
+
+    let (normal, shifted) = printable_pair(layout, code)?;
+    let bytes = if shift { shifted } else { normal };
+    if ctrl && bytes.len() == 1 {
+        let c = bytes[0].to_ascii_lowercase();
         if c.is_ascii_lowercase() {
             return Some(vec![c & 0x1f]);
         }
     }
-    Some(vec![ch])
+    Some(bytes.to_vec())
 }
 
-fn letter(c: u8, shift: bool) -> u8 {
-    if shift {
-        c.to_ascii_uppercase()
-    } else {
-        c
+/// Unshifted/shifted UTF-8 for one printable keycode.
+fn printable_pair(layout: KeyboardLayout, code: u16) -> Option<(&'static [u8], &'static [u8])> {
+    // QWERTZ (pl/de) swaps physical KEY_Y / KEY_Z.
+    let letter = |us: &'static [u8]| -> Option<(&'static [u8], &'static [u8])> {
+        let upper = match us {
+            b"a" => b"A".as_slice(),
+            b"b" => b"B",
+            b"c" => b"C",
+            b"d" => b"D",
+            b"e" => b"E",
+            b"f" => b"F",
+            b"g" => b"G",
+            b"h" => b"H",
+            b"i" => b"I",
+            b"j" => b"J",
+            b"k" => b"K",
+            b"l" => b"L",
+            b"m" => b"M",
+            b"n" => b"N",
+            b"o" => b"O",
+            b"p" => b"P",
+            b"q" => b"Q",
+            b"r" => b"R",
+            b"s" => b"S",
+            b"t" => b"T",
+            b"u" => b"U",
+            b"v" => b"V",
+            b"w" => b"W",
+            b"x" => b"X",
+            b"y" => b"Y",
+            b"z" => b"Z",
+            _ => return None,
+        };
+        Some((us, upper))
+    };
+
+    match code {
+        57 => Some((b" ", b" ")),
+        16 => letter(b"q"),
+        17 => letter(b"w"),
+        18 => letter(b"e"),
+        19 => letter(b"r"),
+        20 => letter(b"t"),
+        21 => match layout {
+            KeyboardLayout::Us => letter(b"y"),
+            KeyboardLayout::Pl | KeyboardLayout::De => letter(b"z"),
+        },
+        22 => letter(b"u"),
+        23 => letter(b"i"),
+        24 => letter(b"o"),
+        25 => letter(b"p"),
+        30 => letter(b"a"),
+        31 => letter(b"s"),
+        32 => letter(b"d"),
+        33 => letter(b"f"),
+        34 => letter(b"g"),
+        35 => letter(b"h"),
+        36 => letter(b"j"),
+        37 => letter(b"k"),
+        38 => letter(b"l"),
+        44 => match layout {
+            KeyboardLayout::Us => letter(b"z"),
+            KeyboardLayout::Pl | KeyboardLayout::De => letter(b"y"),
+        },
+        45 => letter(b"x"),
+        46 => letter(b"c"),
+        47 => letter(b"v"),
+        48 => letter(b"b"),
+        49 => letter(b"n"),
+        50 => letter(b"m"),
+        // US/PL digit+punct; DE uses German symbols.
+        2..=13 | 26 | 27 | 39..=41 | 43 | 51..=53 => match layout {
+            KeyboardLayout::Us | KeyboardLayout::Pl => us_symbol(code),
+            KeyboardLayout::De => de_symbol(code),
+        },
+        _ => None,
     }
+}
+
+fn us_symbol(code: u16) -> Option<(&'static [u8], &'static [u8])> {
+    Some(match code {
+        2 => (b"1", b"!"),
+        3 => (b"2", b"@"),
+        4 => (b"3", b"#"),
+        5 => (b"4", b"$"),
+        6 => (b"5", b"%"),
+        7 => (b"6", b"^"),
+        8 => (b"7", b"&"),
+        9 => (b"8", b"*"),
+        10 => (b"9", b"("),
+        11 => (b"0", b")"),
+        12 => (b"-", b"_"),
+        13 => (b"=", b"+"),
+        26 => (b"[", b"{"),
+        27 => (b"]", b"}"),
+        39 => (b";", b":"),
+        40 => (b"'", b"\""),
+        41 => (b"`", b"~"),
+        43 => (b"\\", b"|"),
+        51 => (b",", b"<"),
+        52 => (b".", b">"),
+        53 => (b"/", b"?"),
+        _ => return None,
+    })
+}
+
+fn de_symbol(code: u16) -> Option<(&'static [u8], &'static [u8])> {
+    Some(match code {
+        2 => (b"1", b"!"),
+        3 => (b"2", b"\""),
+        4 => (b"3", "§".as_bytes()),
+        5 => (b"4", b"$"),
+        6 => (b"5", b"%"),
+        7 => (b"6", b"&"),
+        8 => (b"7", b"/"),
+        9 => (b"8", b"("),
+        10 => (b"9", b")"),
+        11 => (b"0", b"="),
+        12 => ("ß".as_bytes(), b"?"),
+        13 => ("´".as_bytes(), b"`"),
+        26 => ("ü".as_bytes(), "Ü".as_bytes()),
+        27 => (b"+", b"*"),
+        39 => ("ö".as_bytes(), "Ö".as_bytes()),
+        40 => ("ä".as_bytes(), "Ä".as_bytes()),
+        41 => (b"^", "°".as_bytes()),
+        43 => (b"#", b"'"),
+        51 => (b",", b";"),
+        52 => (b".", b":"),
+        53 => (b"-", b"_"),
+        _ => return None,
+    })
+}
+
+pub(crate) fn parse_keyboard_devices(s: &str) -> Vec<String> {
+    s.split(',')
+        .map(|p| p.trim().to_string())
+        .filter(|p| !p.is_empty())
+        .collect()
 }
 
 #[cfg(test)]
@@ -520,38 +571,143 @@ mod tests {
 
     #[test]
     fn special_keys() {
-        assert_eq!(keycode_to_bytes(1, false, false), Some(vec![0x1b]));
-        assert_eq!(keycode_to_bytes(14, false, false), Some(vec![0x7f]));
-        assert_eq!(keycode_to_bytes(15, false, false), Some(vec![b'\t']));
-        assert_eq!(keycode_to_bytes(28, false, false), Some(vec![b'\r']));
         assert_eq!(
-            keycode_to_bytes(103, false, false),
+            keycode_to_bytes(KeyboardLayout::Us, 1, false, false),
+            Some(vec![0x1b])
+        );
+        assert_eq!(
+            keycode_to_bytes(KeyboardLayout::Us, 14, false, false),
+            Some(vec![0x7f])
+        );
+        assert_eq!(
+            keycode_to_bytes(KeyboardLayout::Us, 15, false, false),
+            Some(vec![b'\t'])
+        );
+        assert_eq!(
+            keycode_to_bytes(KeyboardLayout::Us, 28, false, false),
+            Some(vec![b'\r'])
+        );
+        assert_eq!(
+            keycode_to_bytes(KeyboardLayout::Us, 103, false, false),
             Some(b"\x1b[A".to_vec())
         );
         assert_eq!(
-            keycode_to_bytes(108, false, false),
+            keycode_to_bytes(KeyboardLayout::Us, 108, false, false),
             Some(b"\x1b[B".to_vec())
         );
     }
 
     #[test]
     fn letters_shift_and_ctrl() {
-        assert_eq!(keycode_to_bytes(30, false, false), Some(vec![b'a']));
-        assert_eq!(keycode_to_bytes(30, true, false), Some(vec![b'A']));
-        assert_eq!(keycode_to_bytes(30, false, true), Some(vec![0x01])); // Ctrl-A
-        assert_eq!(keycode_to_bytes(16, true, false), Some(vec![b'Q']));
+        assert_eq!(
+            keycode_to_bytes(KeyboardLayout::Us, 30, false, false),
+            Some(vec![b'a'])
+        );
+        assert_eq!(
+            keycode_to_bytes(KeyboardLayout::Us, 30, true, false),
+            Some(vec![b'A'])
+        );
+        assert_eq!(
+            keycode_to_bytes(KeyboardLayout::Us, 30, false, true),
+            Some(vec![0x01])
+        );
+        assert_eq!(
+            keycode_to_bytes(KeyboardLayout::Us, 16, true, false),
+            Some(vec![b'Q'])
+        );
     }
 
     #[test]
-    fn digits_and_symbols() {
-        assert_eq!(keycode_to_bytes(2, false, false), Some(vec![b'1']));
-        assert_eq!(keycode_to_bytes(2, true, false), Some(vec![b'!']));
-        assert_eq!(keycode_to_bytes(57, false, false), Some(vec![b' ']));
-        assert!(keycode_to_bytes(999, false, false).is_none());
+    fn y_z_swap_on_qwertz_layouts() {
+        // Physical KEY_Y (21) / KEY_Z (44).
+        assert_eq!(
+            keycode_to_bytes(KeyboardLayout::Us, 21, false, false),
+            Some(vec![b'y'])
+        );
+        assert_eq!(
+            keycode_to_bytes(KeyboardLayout::Us, 44, false, false),
+            Some(vec![b'z'])
+        );
+        assert_eq!(
+            keycode_to_bytes(KeyboardLayout::Pl, 21, false, false),
+            Some(vec![b'z'])
+        );
+        assert_eq!(
+            keycode_to_bytes(KeyboardLayout::Pl, 44, false, false),
+            Some(vec![b'y'])
+        );
+        assert_eq!(
+            keycode_to_bytes(KeyboardLayout::De, 21, true, false),
+            Some(vec![b'Z'])
+        );
+        assert_eq!(
+            keycode_to_bytes(KeyboardLayout::De, 44, true, false),
+            Some(vec![b'Y'])
+        );
+    }
+
+    #[test]
+    fn digit_row_us_pl_vs_de() {
+        assert_eq!(
+            keycode_to_bytes(KeyboardLayout::Us, 2, false, false),
+            Some(vec![b'1'])
+        );
+        assert_eq!(
+            keycode_to_bytes(KeyboardLayout::Us, 2, true, false),
+            Some(vec![b'!'])
+        );
+        assert_eq!(
+            keycode_to_bytes(KeyboardLayout::Us, 3, true, false),
+            Some(vec![b'@'])
+        );
+        assert_eq!(
+            keycode_to_bytes(KeyboardLayout::Pl, 3, true, false),
+            Some(vec![b'@'])
+        );
+        assert_eq!(
+            keycode_to_bytes(KeyboardLayout::De, 3, true, false),
+            Some(vec![b'"'])
+        );
+        assert_eq!(
+            keycode_to_bytes(KeyboardLayout::De, 8, true, false),
+            Some(vec![b'/'])
+        );
+        assert_eq!(
+            keycode_to_bytes(KeyboardLayout::Us, 8, true, false),
+            Some(vec![b'&'])
+        );
+        assert_eq!(
+            keycode_to_bytes(KeyboardLayout::De, 12, false, false),
+            Some("ß".as_bytes().to_vec())
+        );
+        assert_eq!(
+            keycode_to_bytes(KeyboardLayout::Us, 57, false, false),
+            Some(vec![b' '])
+        );
+        assert!(keycode_to_bytes(KeyboardLayout::Us, 999, false, false).is_none());
+    }
+
+    #[test]
+    fn parse_layout_and_devices() {
+        assert_eq!(KeyboardLayout::parse("us"), Some(KeyboardLayout::Us));
+        assert_eq!(KeyboardLayout::parse("PL"), Some(KeyboardLayout::Pl));
+        assert_eq!(KeyboardLayout::parse("de"), Some(KeyboardLayout::De));
+        assert!(KeyboardLayout::parse("fr").is_none());
+        assert_eq!(
+            parse_keyboard_devices("/dev/input/by-id/foo, Logitech ,"),
+            vec!["/dev/input/by-id/foo".to_string(), "Logitech".to_string()]
+        );
     }
 
     #[test]
     fn eviocgrab_matches_linux_iow() {
         assert_eq!(eviocgrab(), 0x4004_4590);
+    }
+
+    #[test]
+    fn allowlist_match_helpers() {
+        assert!(is_denylisted_name("power button"));
+        assert!(!is_denylisted_name("logitech keyboard"));
+        assert!(discover_keyboards(&[]).is_empty());
     }
 }

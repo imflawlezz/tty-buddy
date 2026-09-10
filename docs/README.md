@@ -7,8 +7,8 @@ Detailed notes beyond the root [README](../README.md).
 | Document | Topic |
 |----------|-------|
 | [guides/flashing.md](guides/flashing.md) | Firmware images and how to flash them |
-| [guides/daemon.md](guides/daemon.md) | Daemon install, upgrade, uninstall, multi-board |
-| [reference/configuration.md](reference/configuration.md) | `daemon.toml`, `buddy.config`, CLI |
+| [guides/daemon.md](guides/daemon.md) | Daemon install, upgrade, uninstall, keyboard allowlist, multi-board |
+| [reference/configuration.md](reference/configuration.md) | `daemon.toml`, `buddy.config` (incl. `keyboard_devices` / layouts), CLI |
 | [reference/protocol.md](reference/protocol.md) | Serial frame and StatusSnap layout |
 | [architecture/overview.md](architecture/overview.md) | Host ↔ device responsibilities |
 | [guides/development.md](guides/development.md) | Build, test, local packages |
