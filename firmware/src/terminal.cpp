@@ -2,6 +2,7 @@
 
 #include <string.h>
 
+#include "glyph_font.h"
 #include "osd.h"
 
 static const uint16_t kAnsi16[16] = {
@@ -480,6 +481,13 @@ void Terminal::paintCell(int x, int y, bool cursor_block) {
 
   if (blitProcedural(px, py, cp, fg, bg))
     return;
+
+  uint8_t rows[TERM_CELL_H];
+  if (glyphUnicodeRows(cp, rows)) {
+    tft_->fillRect(px, py, TERM_CELL_W, TERM_CELL_H, bg);
+    blitRows(px, py, rows, fg, bg);
+    return;
+  }
 
   tft_->fillRect(px, py, TERM_CELL_W, TERM_CELL_H, bg);
   tft_->drawChar(px, py, '?', fg, bg, 1);
