@@ -25,7 +25,7 @@ Implementation: [`daemon/src/settings.rs`](../../daemon/src/settings.rs), [`daem
 | Change | Effect |
 |--------|--------|
 | Any `daemon.toml` key | Restart `tty-buddy@…` (or the process) |
-| `buddy.config` mtime | Re-parse; push `FLAG_STYLE`; update `fps`. Keyboard-watch policy is reapplied only while already in **status** mode |
+| `buddy.config` mtime | Re-parse; push `FLAG_STYLE`; update `fps`. Keyboard allowlist/layout reapplied: watch (or ungrab) in **status**, re-grab in **terminal** |
 | `startup_mode` while running | Stored in memory only — **does not** flip status ↔ terminal mid-session |
 | CLI `--status` / `--terminal` | Applied once when the session starts; not re-applied on buddy reload |
 | CLI `--fps` | Applied at session start and again on every buddy reload |
@@ -68,9 +68,11 @@ sets `/etc/tty-buddy/buddy.config`).
 ### Discovery (`pick_device`)
 
 1. `device_path` if that path exists
-2. Else match `vid`/`pid` (and `serial` if set)
-3. Else first Espressif `303a:1001`
-4. Else sole listed tty / `/dev/tty-buddy` / first candidate
+2. Else if `serial` is set: match that serial (optionally narrowed by `vid`/`pid`).
+   **No match → fail closed** (do not fall through to another board)
+3. Else match `vid`/`pid` (first / only hit)
+4. Else first Espressif `303a:1001`
+5. Else sole listed tty / `/dev/tty-buddy` / first candidate
 
 `tty-buddy devices` lists candidates. `tty-buddy setup` writes host fields
 only (see [CLI](#cli)).
@@ -135,16 +137,36 @@ keys.
 | Key | Alias | Default | Semantics |
 |-----|-------|---------|-------------|
 | `startup_mode` | `start_in_status` | status | Terminal if value is `terminal`, `console`, `tty`, `false`, `0`, `no`, or `off` (case-insensitive). **Any other string → status** |
-| `keyboard_opens_terminal` | — | `true` | In status mode, watch matching host keyboards without grab; any activity opens terminal and sets activity/wake |
+| `keyboard_opens_terminal` | — | `true` | In status mode, watch allowlisted keyboards without grab; any activity opens terminal and sets activity/wake |
 | `fps` | — | `10` | Terminal frame cap; parsed value `.max(1.0)` |
+| `keyboard_layout` | — | `us` | Evdev→PTY map only (not XKB / not AltGr). `us`; `pl` = QWERTZ Y/Z swap with US digit/punct (no Polish diacritic keys); `de` = QWERTZ + German letters (äöüß…). Aliases: `en`/`qwerty`→us, `pl_qwertz`/`polish`→pl, `de_qwertz`/`german`→de |
+| `keyboard_devices` | `keyboard_device` | empty | Allowlist: `/dev/input/by-id/…` paths and/or case-insensitive name substrings (comma-separated). **Empty → no keyboards opened** + warning |
 
 `keyboard_opens_terminal = true` is convenient on a dedicated host console,
 but it is aggressive on a desktop: typing on a watched keyboard can pull the
 panel into terminal mode. Set it to `false` to disable status-mode keyboard
 watch entirely.
 
+**Allowlist.** List candidates with `ls /dev/input/by-id/` and pick the
+`*-event-kbd` symlink for the board you want (skip `*-event-mouse`,
+`*-hidraw`, `*-event-joystick`), or use a name substring. Without
+`keyboard_devices`, terminal mode will not receive USB keyboard input even
+when `keyboard_opens_terminal` is true. Firmware PL/DE glyphs render those
+codepoints in the grid; `keyboard_layout = pl` does not type Polish
+diacritics. Example:
+
+```ini
+[behavior]
+startup_mode = status
+keyboard_opens_terminal = false
+fps = 10
+keyboard_layout = pl
+keyboard_devices = /dev/input/by-id/usb-NuPhy_Air75_V3_NuPhy_Keybord_0720-event-kbd
+```
+
 Packaging may prepend a default `[behavior]` block if missing
-([daemon lifecycle](../guides/daemon.md)).
+([daemon lifecycle](../guides/daemon.md)). That default does **not** set
+`keyboard_devices` — configure it after install.
 
 ---
 
@@ -413,8 +435,10 @@ Panel behaviour + display (fragment):
 ```ini
 [behavior]
 startup_mode = status
-keyboard_opens_terminal = true
+keyboard_opens_terminal = false
 fps = 10
+keyboard_layout = us
+keyboard_devices = /dev/input/by-id/usb-EXAMPLE-event-kbd
 
 [display]
 brightness = 4

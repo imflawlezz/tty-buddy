@@ -83,10 +83,18 @@ and [`osd.cpp`](../../firmware/src/osd.cpp) (`GPIO5` BL, `GPIO10` button). Wirin
 `make firmware` fails if that merged file is missing after `pio run`.
 
 Env **`native`**: Unity tests with `test_build_src` filtered to
-[`protocol.cpp`](../../firmware/src/protocol.cpp) only
-([`firmware/test/test_protocol/`](../../firmware/test/test_protocol/)). Do
+[`protocol.cpp`](../../firmware/src/protocol.cpp) and
+[`glyph_font.cpp`](../../firmware/src/glyph_font.cpp)
+([`firmware/test/test_protocol/`](../../firmware/test/test_protocol/),
+[`firmware/test/test_glyphs/`](../../firmware/test/test_glyphs/)). Do
 **not** run `pio run -e native` — there is no `main()` outside the test
 harness.
+
+Unicode cell bitmaps for **Polish and German** diacritics live in
+[`glyph_unicode_data.h`](../../firmware/src/glyph_unicode_data.h), generated
+via [`scripts/gen_unicode_glyphs.py`](../../firmware/scripts/gen_unicode_glyphs.py)
+(font8x8 Public Domain + Unifont SIL OFL 1.1). Other non-ASCII still shows
+`?` aside from procedural box/block/Braille.
 
 ### Local firmware loop
 
