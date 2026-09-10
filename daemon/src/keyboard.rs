@@ -278,7 +278,10 @@ impl Drop for Keyboard {
     }
 }
 
-fn discover_keyboards(allowlist: &[String], warned_permission: &mut bool) -> Vec<(PathBuf, String)> {
+fn discover_keyboards(
+    allowlist: &[String],
+    warned_permission: &mut bool,
+) -> Vec<(PathBuf, String)> {
     let mut out = Vec::new();
     if allowlist.is_empty() {
         return out;
