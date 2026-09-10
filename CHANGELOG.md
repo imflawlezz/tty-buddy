@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] — 2026-09-10
+
 ### Added
 
 - `[behavior] keyboard_devices` allowlist: comma-separated `/dev/input/by-id/…`
@@ -118,6 +120,7 @@ host daemon over USB-Serial/JTAG.
 - OSD idle auto-close no longer stalls while `wake_on_alert` holds the panel
   awake for a status alert (sleep still waits until the alert clears)
 
-[Unreleased]: https://github.com/imflawlezz/tty-buddy/compare/v1.0.1...HEAD
+[Unreleased]: https://github.com/imflawlezz/tty-buddy/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/imflawlezz/tty-buddy/releases/tag/v1.1.0
 [1.0.1]: https://github.com/imflawlezz/tty-buddy/releases/tag/v1.0.1
 [1.0.0]: https://github.com/imflawlezz/tty-buddy/releases/tag/v1.0.0
