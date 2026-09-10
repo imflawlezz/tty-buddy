@@ -86,7 +86,7 @@ Still deserialized:
 | Key | Default | Notes |
 |-----|---------|-------|
 | `start_in_status` | `true` | |
-| `keyboard_opens_terminal` | `true` | |
+| `keyboard_opens_terminal` | `false` | |
 | `fps` | `10.0` | |
 
 They apply **only** when buddy.config has **no** `[behavior]` section
@@ -137,15 +137,16 @@ keys.
 | Key | Alias | Default | Semantics |
 |-----|-------|---------|-------------|
 | `startup_mode` | `start_in_status` | status | Terminal if value is `terminal`, `console`, `tty`, `false`, `0`, `no`, or `off` (case-insensitive). **Any other string → status** |
-| `keyboard_opens_terminal` | — | `true` | In status mode, watch allowlisted keyboards without grab; any activity opens terminal and sets activity/wake |
+| `keyboard_opens_terminal` | — | `false` | In status mode, watch allowlisted keyboards without grab; any activity opens terminal and sets activity/wake. Shipped default is off (safe for shared desktops). **Kiosk / dedicated console:** set `true` |
 | `fps` | — | `10` | Terminal frame cap; parsed value `.max(1.0)` |
 | `keyboard_layout` | — | `us` | Evdev→PTY map only (not XKB / not AltGr). `us`; `pl` = QWERTZ Y/Z swap with US digit/punct (no Polish diacritic keys); `de` = QWERTZ + German letters (äöüß…). Aliases: `en`/`qwerty`→us, `pl_qwertz`/`polish`→pl, `de_qwertz`/`german`→de |
 | `keyboard_devices` | `keyboard_device` | empty | Allowlist: `/dev/input/by-id/…` paths and/or case-insensitive name substrings (comma-separated). **Empty → no keyboards opened** + warning |
 
-`keyboard_opens_terminal = true` is convenient on a dedicated host console,
-but it is aggressive on a desktop: typing on a watched keyboard can pull the
-panel into terminal mode. Set it to `false` to disable status-mode keyboard
-watch entirely.
+`keyboard_opens_terminal = true` is for a **kiosk** / dedicated host console:
+typing on a watched keyboard can pull the panel into terminal mode. The shipped
+default is `false` so a shared desktop does not auto-open terminal on key
+activity. While terminal mode is active, allowlisted keyboards are still
+grabbed even when this flag is `false`.
 
 **Allowlist.** List candidates with `ls /dev/input/by-id/` and pick the
 `*-event-kbd` symlink for the board you want (skip `*-event-mouse`,
