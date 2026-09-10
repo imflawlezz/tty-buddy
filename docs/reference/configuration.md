@@ -48,7 +48,8 @@ TOML. Search order when `--config` is omitted ([`settings_path`](../../daemon/sr
 4. else `/etc/tty-buddy/daemon.toml`
 
 Missing file → `DaemonSettings::default()`. Invalid or unreadable
-`daemon.toml` aborts startup / setup instead of silently falling back.
+`daemon.toml` aborts startup / setup (`DaemonSettings::load`); there is no
+fail-open helper that swallows parse errors.
 
 ### Host keys
 

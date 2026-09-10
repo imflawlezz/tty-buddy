@@ -47,6 +47,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Filtered `[services]` queries use one batched `systemctl is-active` instead of
   per-unit `show` / `is-active` forks
 
+### Removed
+
+- Fail-open `DaemonSettings::load_or_default` (unused). Callers use `load`,
+  which still defaults on a missing file and errors on invalid/unreadable TOML.
+
 ## [1.0.1] — 2026-09-09
 
 ### Changed
