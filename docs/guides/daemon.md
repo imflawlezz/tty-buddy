@@ -8,10 +8,12 @@ remove them.
 | Path | Purpose |
 |------|---------|
 | `/usr/bin/tty-buddy` | Daemon binary |
-| `/usr/lib/systemd/system/tty-buddy@.service` | Template unit; instance = Linux username |
-| `/etc/udev/rules.d/99-tty-buddy.rules` | `303a:1001` → `/dev/tty-buddy`, group `dialout` |
+| `/usr/lib/systemd/system/tty-buddy@.service` | Default unit; instance = Linux username |
+| `/usr/lib/systemd/system/tty-buddy-board@.service` | Opt-in multi-board unit; instance = board id |
+| `/etc/udev/rules.d/99-tty-buddy.rules` | `303a:1001` → `/dev/tty-buddy` and `/dev/tty-buddy-<serial>` |
 | `/etc/tty-buddy/daemon.toml` | Host settings (created if missing) |
 | `/etc/tty-buddy/buddy.config` | Panel config (created if missing) |
+| `/etc/tty-buddy/instances/<id>/` | Per-board configs (created by `add-board`) |
 | `/usr/lib/tty-buddy/configure-instance.sh` | Shared post-install helper |
 | `/usr/lib/tty-buddy/uninstall.sh` | Tarball uninstall only |
 
@@ -155,20 +157,37 @@ EACCES with an `input` group hint. Set `keyboard_devices` (see
 
 ## Several boards on one host
 
-Default udev symlink is a single `/dev/tty-buddy`. With multiple Espressif
-JTAG devices, pin one in `daemon.toml`:
+udev always creates `/dev/tty-buddy`. When the USB device has a serial, it
+also creates `/dev/tty-buddy-<serial>` (stable multi-board pin). With more
+than one board plugged in, bare `/dev/tty-buddy` is ambiguous — pin each
+board explicitly.
+
+**Default single-board path** (no extra setup): `tty-buddy@$USER` +
+`/etc/tty-buddy/daemon.toml` + `/dev/tty-buddy`.
+
+**Extra boards** — one systemd unit and config dir per board:
 
 ```bash
 tty-buddy devices
+sudo /usr/lib/tty-buddy/configure-instance.sh add-board "$USER" '<serial>'
+systemctl status "tty-buddy-board@$(echo '<serial>' | tr ':/' '-')"
+```
+
+`add-board` creates `/etc/tty-buddy/instances/<id>/` (`daemon.toml` +
+`buddy.config`), writes a `User=` drop-in for `tty-buddy-board@<id>`, and
+enables the unit. Instance id defaults to the serial with `:`/`/` replaced
+by `-`. Pass a fourth argument to override the id.
+
+Alternatively pin the default unit only:
+
+```bash
 tty-buddy setup --config /etc/tty-buddy/daemon.toml
 sudo systemctl restart tty-buddy@$USER
 ```
 
 `setup` writes `device_path`, `vid`, `pid`, `serial`, and `shell_user`. If
 `serial` is set and no board matches, discovery **fails closed** (does not
-pick another device). Only one `tty-buddy@user` instance is packaged by
-default; extra boards need
-separate config/unit arrangements (not automated).
+pick another device).
 
 ## Uninstall
 
@@ -188,7 +207,8 @@ Remove package and its conffiles:
 sudo apt-get purge tty-buddy
 ```
 
-`prerm` disables `tty-buddy.service` and all `tty-buddy@*` instances.
+`prerm` disables `tty-buddy.service`, all `tty-buddy@*`, and all
+`tty-buddy-board@*` instances.
 
 ### Tarball
 

@@ -26,12 +26,12 @@ The host daemon opens the CDC port exclusively. Web flashers and esptool
 need it free:
 
 ```bash
-sudo systemctl stop 'tty-buddy@*'
+sudo systemctl stop 'tty-buddy@*' 'tty-buddy-board@*'
 ```
 
-`firmware/scripts/flash.sh` stops running `tty-buddy.service` and
-`tty-buddy@*` units when systemd is present, then restarts the ones it
-stopped after a successful flash.
+`firmware/scripts/flash.sh` stops running `tty-buddy.service`,
+`tty-buddy@*`, and `tty-buddy-board@*` units when systemd is present, then
+restarts the ones it stopped after a successful flash.
 
 Port discovery in `flash.sh`:
 

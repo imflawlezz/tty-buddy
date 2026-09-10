@@ -159,15 +159,18 @@ systemctl status tty-buddy@$USER
 
 #### Several boards on one host
 
-Pin a specific USB device (path / vid / pid / serial) and console user into
-`daemon.toml`, then restart. If `serial` is set and no board matches,
-discovery fails closed (does not pick another device):
+Single-board installs need no extra config (`/dev/tty-buddy` +
+`tty-buddy@$USER`). For additional boards, udev also creates
+`/dev/tty-buddy-<serial>`; register each with:
 
 ```bash
-tty-buddy setup --config /etc/tty-buddy/daemon.toml
-sudo systemctl restart tty-buddy@$USER
+tty-buddy devices
+sudo /usr/lib/tty-buddy/configure-instance.sh add-board "$USER" '<serial>'
 ```
 
+That creates `/etc/tty-buddy/instances/<id>/` and enables
+`tty-buddy-board@<id>`. If `serial` is set and no board matches, discovery
+fails closed. Details: [daemon guide](docs/guides/daemon.md#several-boards-on-one-host).
 ### Keyboard on the host
 
 USB keyboards are handled by the **daemon**, not the ESP. Prefer a stable
