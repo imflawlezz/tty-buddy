@@ -61,10 +61,6 @@ impl DaemonSettings {
         }
     }
 
-    pub fn load_or_default(path: &Path) -> Self {
-        Self::load(path).unwrap_or_default()
-    }
-
     pub fn save(&self, path: &PathBuf) -> Result<()> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).ok();
