@@ -113,9 +113,10 @@ flowchart LR
 ## Packaging on the host
 
 - Binary: `/usr/bin/tty-buddy`
-- Unit: `tty-buddy@.service` — instance name is the Linux user
-- udev: Espressif `303a:1001` → `/dev/tty-buddy` (`dialout`)
-- Config dir: `/etc/tty-buddy/`
+- Units: `tty-buddy@.service` (instance = Linux user); optional
+  `tty-buddy-board@.service` (instance = board id)
+- udev: Espressif `303a:1001` → `/dev/tty-buddy` and `/dev/tty-buddy-<serial>`
+- Config dir: `/etc/tty-buddy/` (per-board under `instances/<id>/`)
 
 Install scripts bind `shell_user`, groups, and `buddy.config` ownership to
 that user. See [daemon package lifecycle](../guides/daemon.md).

@@ -20,6 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   device**
 - Firmware terminal glyphs for curated Polish and German diacritics (6×8), with
   a generator script and native unit tests
+- udev serial-suffixed nodes `/dev/tty-buddy-<serial>` alongside `/dev/tty-buddy`
+- Opt-in multi-board packaging: `tty-buddy-board@<id>`,
+  `/etc/tty-buddy/instances/<id>/`, and
+  `configure-instance.sh add-board <user> <serial> [id]`
 
 ### Changed
 

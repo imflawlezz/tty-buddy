@@ -1,4 +1,8 @@
-# ESP32-C3 USB-JTAG (303a:1001) → /dev/tty-buddy (service is tty-buddy@<user>).
+# ESP32-C3 USB-JTAG (303a:1001) → /dev/tty-buddy (default; ambiguous if N>1).
+# With ATTRS{serial}: also /dev/tty-buddy-%s{serial} for multi-board pinning.
 
 SUBSYSTEM=="tty", ATTRS{idVendor}=="303a", ATTRS{idProduct}=="1001", \
   SYMLINK+="tty-buddy", MODE="0660", GROUP="dialout", TAG+="uaccess"
+
+SUBSYSTEM=="tty", ATTRS{idVendor}=="303a", ATTRS{idProduct}=="1001", ATTRS{serial}=="?*", \
+  SYMLINK+="tty-buddy-%s{serial}", MODE="0660", GROUP="dialout", TAG+="uaccess"

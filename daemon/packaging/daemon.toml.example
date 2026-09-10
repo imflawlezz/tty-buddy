@@ -1,8 +1,9 @@
 # tty-buddy host settings (/etc/tty-buddy/daemon.toml)
 #
 # Device bind + shell_user. Panel UX: buddy.config.
-# udev → /dev/tty-buddy; else match Espressif USB-JTAG (303a:1001).
-# `tty-buddy setup` only when pinning one of several boards.
+# udev → /dev/tty-buddy (+ /dev/tty-buddy-<serial> when ATTRS{serial} is set).
+# Else match Espressif USB-JTAG (303a:1001).
+# `tty-buddy setup` or `configure-instance.sh add-board` when pinning boards.
 device_path = "/dev/tty-buddy"
 vid = 12346   # 0x303A Espressif
 pid = 4097    # 0x1001 USB JTAG/serial

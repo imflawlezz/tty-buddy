@@ -60,6 +60,7 @@ install -m 755 "$BIN" "$PKG_ROOT/usr/bin/tty-buddy"
 install -m 644 "$ROOT/buddy.config" "$PKG_ROOT/etc/tty-buddy/buddy.config"
 install -m 644 "$ROOT/packaging/daemon.toml.example" "$PKG_ROOT/etc/tty-buddy/daemon.toml"
 install -m 644 "$ROOT/packaging/tty-buddy@.service" "$PKG_ROOT/usr/lib/systemd/system/tty-buddy@.service"
+install -m 644 "$ROOT/packaging/tty-buddy-board@.service" "$PKG_ROOT/usr/lib/systemd/system/tty-buddy-board@.service"
 install -m 644 "$ROOT/udev/99-tty-buddy.rules" "$PKG_ROOT/etc/udev/rules.d/99-tty-buddy.rules"
 install -m 755 "$ROOT/packaging/configure-instance.sh" "$PKG_ROOT/usr/lib/tty-buddy/configure-instance.sh"
 
@@ -115,6 +116,9 @@ if [ "$1" = remove ] || [ "$1" = deconfigure ]; then
   if command -v systemctl >/dev/null 2>&1; then
     systemctl disable --now tty-buddy.service 2>/dev/null || true
     for unit in $(systemctl list-units --type=service --all --plain --no-legend 'tty-buddy@*' 2>/dev/null | awk '{print $1}'); do
+      systemctl disable --now "$unit" 2>/dev/null || true
+    done
+    for unit in $(systemctl list-units --type=service --all --plain --no-legend 'tty-buddy-board@*' 2>/dev/null | awk '{print $1}'); do
       systemctl disable --now "$unit" 2>/dev/null || true
     done
   fi

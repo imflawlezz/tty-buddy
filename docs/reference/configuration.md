@@ -54,7 +54,7 @@ Missing file → `DaemonSettings::default()`. Invalid or unreadable
 
 | Key | Type | Default (`Default` impl) | Meaning |
 |-----|------|--------------------------|---------|
-| `device_path` | string? | unset | Preferred node (usually `/dev/tty-buddy`) |
+| `device_path` | string? | unset | Preferred node (usually `/dev/tty-buddy` or `/dev/tty-buddy-<serial>`) |
 | `vid` | u16? | `0x303A` (`12346`) | USB vendor |
 | `pid` | u16? | `0x1001` (`4097`) | USB product (Espressif USB-Serial/JTAG) |
 | `serial` | string? | unset | Disambiguate when several boards share vid/pid |
@@ -74,10 +74,14 @@ sets `/etc/tty-buddy/buddy.config`).
 4. Else first Espressif `303a:1001`
 5. Else sole listed tty / `/dev/tty-buddy` / first candidate
 
-`tty-buddy devices` lists candidates. `tty-buddy setup` writes host fields
+`tty-buddy devices` lists candidates (including `/dev/tty-buddy` and
+`/dev/tty-buddy-*` udev symlinks). `tty-buddy setup` writes host fields
 only (see [CLI](#cli)).
 
-For stable multi-board setups, set `serial` as well as `device_path`/USB ids.
+For multi-board hosts, prefer `configure-instance.sh add-board` (creates
+`/etc/tty-buddy/instances/<id>/` + `tty-buddy-board@<id>`), or set `serial`
+and `device_path=/dev/tty-buddy-<serial>` yourself. Bare `/dev/tty-buddy` is
+ambiguous when more than one board is plugged in.
 
 ### Legacy behaviour keys (host file)
 
@@ -400,12 +404,14 @@ tty-buddy probe [--buddy-config PATH]
 | `devices` | List serial candidates |
 | `probe` | Load panel config, sample metrics twice, print summary — **no serial open** |
 
-Systemd: `ExecStart=/usr/bin/tty-buddy run --config /etc/tty-buddy/daemon.toml`.
+Systemd default: `ExecStart=/usr/bin/tty-buddy run --config /etc/tty-buddy/daemon.toml`
+(`tty-buddy@<user>`). Board instances use
+`/etc/tty-buddy/instances/%i/daemon.toml` (`tty-buddy-board@<id>`).
 
 `shell_user` is not a uid switch. The daemon already runs as `tty-buddy@<user>`
-and spawns that same user’s login shell (`$SHELL -l`, home/env from
-`/etc/passwd`) inside the PTY. A mismatched `shell_user` causes startup to
-fail.
+(or the `User=` from a board-instance drop-in) and spawns that same user’s
+login shell (`$SHELL -l`, home/env from `/etc/passwd`) inside the PTY. A
+mismatched `shell_user` causes startup to fail.
 
 ---
 

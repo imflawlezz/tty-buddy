@@ -29,11 +29,20 @@ if command -v systemctl >/dev/null 2>&1; then
     [[ -n "$unit" ]] || continue
     systemctl disable --now "$unit" 2>/dev/null || true
   done < <(systemctl list-units --type=service --all --plain --no-legend 'tty-buddy@*' 2>/dev/null | awk '{print $1}')
+  while read -r unit; do
+    [[ -n "$unit" ]] || continue
+    systemctl disable --now "$unit" 2>/dev/null || true
+  done < <(systemctl list-units --type=service --all --plain --no-legend 'tty-buddy-board@*' 2>/dev/null | awk '{print $1}')
 fi
 
 rm -f /usr/bin/tty-buddy
 rm -f /usr/lib/systemd/system/tty-buddy@.service
+rm -f /usr/lib/systemd/system/tty-buddy-board@.service
 rm -f /etc/systemd/system/tty-buddy.service
+for dropin in /etc/systemd/system/tty-buddy-board@*.service.d; do
+  [[ -e "$dropin" ]] || continue
+  rm -rf "$dropin"
+done
 rm -f /etc/udev/rules.d/99-tty-buddy.rules
 rm -f /usr/lib/tty-buddy/configure-instance.sh
 rm -f /usr/lib/tty-buddy/uninstall.sh
